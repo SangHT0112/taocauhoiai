@@ -192,11 +192,11 @@ Nội dung bài học: ${row.lesson_content || 'Không có nội dung chi tiết
 
     let objectStr: string;
     if (isMixed) {
-      objectStr = '{ "question_text": "...", "emoji": "...", "answers"?: ["...", "... (correct)", ...], "model_answer"?: "...", "explanation": "...", "suggested_type": "multiple_choice|true_false|multiple_select|open_ended" }';
+      objectStr = '{ "question_text": "...", "answers"?: ["...", "... (correct)", ...], "model_answer"?: "...", "explanation": "...", "suggested_type": "multiple_choice|true_false|multiple_select|open_ended" }';
     } else if (isChoiceBased) {
-      objectStr = `{ "question_text": "...", "emoji": "...", "answers": ["...", "... (correct)", ...], "explanation": "...", "suggested_type": "${typesToUse[0]}" }`;
+      objectStr = `{ "question_text": "...", "answers": ["...", "... (correct)", ...], "explanation": "...", "suggested_type": "${typesToUse[0]}" }`;
     } else {
-      objectStr = '{ "question_text": "...", "emoji": "...", "model_answer": "...", "explanation": "...", "suggested_type": "open_ended" }';
+      objectStr = '{ "question_text": "...", "model_answer": "...", "explanation": "...", "suggested_type": "open_ended" }';
     }
 
     let specificReq = '';
@@ -236,7 +236,7 @@ YÊU CẦU CHUNG:
 - Độ khó: ${difficulty}
 - Phân bố loại: ${distributionStr}
 - ${specificReq}
-- Câu hỏi ngắn (<50 chữ), có emoji phù hợp
+- Câu hỏi ngắn (<50 chữ)
 - Explanation học thuật, <30 chữ
 - suggested_type chỉ dùng trong: ${typesStr}
 `.trim();
@@ -334,7 +334,6 @@ YÊU CẦU CHUNG:
           const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
           questions.push({
             question_text: `Câu hỏi mẫu ${questions.length + 1}.`,
-            emoji: "❓",
             explanation: "Giải thích mẫu.",
             suggested_type: targetType,
             ...(targetType !== 'open_ended' && { answers: dummyAnswers }),
@@ -372,7 +371,6 @@ YÊU CẦU CHUNG:
             const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
             questions.push({
               question_text: `Câu hỏi mẫu ${questions.length + 1}.`,
-              emoji: "❓",
               explanation: "Giải thích mẫu.",
               suggested_type: targetType,
               ...(targetType !== 'open_ended' && { answers: dummyAnswers }),
@@ -401,7 +399,6 @@ YÊU CẦU CHUNG:
             try {
               const q: Partial<GeneratedQuestion> = JSON.parse(objStr.replace(/,\s*([}\]])/g, "$1"));
               q.question_text = q.question_text || `Câu hỏi ${i + 1}`;
-              q.emoji = q.emoji || "❓";
               q.explanation = q.explanation || "Giải thích mẫu.";
               q.suggested_type = q.suggested_type || typesToUse[0];
               const st = q.suggested_type;
@@ -423,7 +420,6 @@ YÊU CẦU CHUNG:
               const dummyAnswers = getDummyAnswers(dummyType, effectiveNumAnswers);
               fixedQuestions.push({
                 question_text: `Câu hỏi ${i + 1} (tự động fix).`,
-                emoji: "❓",
                 explanation: "Lỗi parse, dùng mẫu.",
                 suggested_type: dummyType,
                 ...(dummyType !== 'open_ended' && { answers: dummyAnswers }),
@@ -439,7 +435,6 @@ YÊU CẦU CHUNG:
             const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
             sortedFixed.push({
               question_text: `Câu hỏi mẫu ${sortedFixed.length + 1}.`,
-              emoji: "❓",
               explanation: "Giải thích mẫu.",
               suggested_type: targetType,
               ...(targetType !== 'open_ended' && { answers: dummyAnswers }),

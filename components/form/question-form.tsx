@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { useRouter } from "next/navigation"
 import type { QuestionFormData, InsertedQuestion, QuestionFormProps, Grade, Subject, Chapter, Lesson } from "@/types/question"
 import { useUser } from "@/app/providers/UserProvider"
+import { useRef } from "react"
 
 const availableTypes = [
   { value: "multiple_choice", label: "Trắc nghiệm nhiều lựa chọn", description: "1 đáp án đúng", icon: "📝" },
@@ -23,6 +24,8 @@ const availableTypes = [
 export default function QuestionForm({ onCancel, initialData }: QuestionFormProps) {
   const { userId } = useUser()
   const router = useRouter()
+
+  const hasLoadedDraft = useRef(false)
 
   const initialSelectedTypes = initialData?.selected_types || ["multiple_choice"]
   const initialType = initialData?.type || (initialSelectedTypes.length > 1 ? "mixed" : initialSelectedTypes[0])
@@ -86,6 +89,7 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
 
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
+  const [isLoadingDraft, setIsLoadingDraft] = useState(false)
 
   const hasMultipleChoice = formData.selected_types.includes("multiple_choice")
 
@@ -111,9 +115,12 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
       if (res.ok) {
         const data = await res.json();
         setSubjects(data);
-        setSelectedSubjectId(0); // Reset subject khi thay đổi grade
-        setChapters([]); // Reset chapters
-        setLessons([]); // Reset lessons
+        // Chỉ reset nếu KHÔNG đang load draft VÀ selectedSubjectId không hợp lệ
+        if (!isLoadingDraft && selectedSubjectId > 0 && !data.some((s: Subject) => s.id === selectedSubjectId)) {
+          setSelectedSubjectId(0);
+          setChapters([]);
+          setLessons([]);
+        }
       }
     } catch (err) {
       console.error("Lỗi fetch subjects:", err);
@@ -127,8 +134,10 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
       if (res.ok) {
         const data = await res.json();
         setChapters(data);
-        setSelectedChapterId(0); // Reset chapter
-        setLessons([]); // Reset lessons
+        if (!isLoadingDraft && selectedChapterId > 0 && !data.some((c: Chapter) => c.id === selectedChapterId)) {
+          setSelectedChapterId(0);
+          setLessons([]);
+        }
       }
     } catch (err) {
       console.error("Lỗi fetch chapters:", err);
@@ -141,47 +150,52 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
       const res = await fetch(`/api/lessons?chapter_id=${chapterId}`);
       if (res.ok) {
         const data = await res.json();
-        setLessons(data.sort((a: Lesson, b: Lesson) => (a.lesson_order || 0) - (b.lesson_order || 0))); // Sort theo lesson_order
-        setSelectedLessonId(0); // Reset lesson nếu cần
+        setLessons(data.sort((a: Lesson, b: Lesson) => (a.lesson_order || 0) - (b.lesson_order || 0)));
+        if (!isLoadingDraft && selectedLessonId > 0 && !data.some((l: Lesson) => l.id === selectedLessonId)) {
+          setSelectedLessonId(0);
+        }
       }
     } catch (err) {
       console.error("Lỗi fetch lessons:", err);
     }
   };
 
-  // useEffect để fetch dữ liệu
+  // Fetch grades ngay khi mount
   useEffect(() => {
     fetchGrades();
   }, []);
 
+  // Trigger fetches khi selectedId thay đổi
   useEffect(() => {
-    if (selectedGradeId) {
+    if (selectedGradeId > 0) {
       fetchSubjects(selectedGradeId);
-      setFormData(prev => ({ ...prev, grade_id: selectedGradeId, subject_id: 0, chapter_id: 0, lesson_id: 0 }));
     }
   }, [selectedGradeId]);
 
   useEffect(() => {
-    if (selectedSubjectId) {
+    if (selectedSubjectId > 0) {
       fetchChapters(selectedSubjectId);
-      setFormData(prev => ({ ...prev, subject_id: selectedSubjectId, chapter_id: 0, lesson_id: 0 }));
     }
   }, [selectedSubjectId]);
 
   useEffect(() => {
-    if (selectedChapterId) {
+    if (selectedChapterId > 0) {
       fetchLessons(selectedChapterId);
-      setFormData(prev => ({ ...prev, chapter_id: selectedChapterId, lesson_id: 0 }));
     }
   }, [selectedChapterId]);
 
+  // Sync formData với selectedIds
   useEffect(() => {
-    if (selectedLessonId) {
-      setFormData(prev => ({ ...prev, lesson_id: selectedLessonId }));
-    }
-  }, [selectedLessonId]);
+    setFormData(prev => ({
+      ...prev,
+      grade_id: selectedGradeId,
+      subject_id: selectedSubjectId,
+      chapter_id: selectedChapterId,
+      lesson_id: selectedLessonId,
+    }));
+  }, [selectedGradeId, selectedSubjectId, selectedChapterId, selectedLessonId]);
 
-  // Handle change cho selects
+  // Handle select change
   const handleSelectChange = (e: ChangeEvent<HTMLSelectElement>) => {
     const { name, value } = e.target;
     const id = parseInt(value) || 0;
@@ -261,7 +275,6 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
       return setError(errorMessages.numAnswers)
     }
 
-    // Validation thêm cho các id mới (tùy chọn)
     if (!selectedGradeId) return setError("Vui lòng chọn khối lớp");
     if (!selectedSubjectId) return setError("Vui lòng chọn môn học");
     if (!selectedChapterId) return setError("Vui lòng chọn chương");
@@ -297,15 +310,16 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
 
       const generatedData = await response.json()
 
-      // Giả sử API trả về exercise ID sau khi tạo thành công
       const exerciseId = generatedData.exercise?.id || generatedData.id
       if (!exerciseId) {
         throw new Error("Không nhận được ID bài tập từ server")
       }
 
-      // Redirect đến trang chi tiết bài tập vừa tạo
+      // Clear draft sau submit thành công
+      localStorage.removeItem(STORAGE_KEY);
+
       router.push(`/exercises/${exerciseId}`)
-      router.refresh()  // Refresh để update data nếu cần
+      router.refresh()
     } catch (err: unknown) {
       setError((err as Error).message || "Lỗi khi tạo câu hỏi. Vui lòng thử lại.")
     } finally {
@@ -322,7 +336,11 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
   }, [formData.selected_types, typeQuantities])
 
   const STORAGE_KEY = "question_form_draft"
+
+  // Lưu draft mỗi khi state thay đổi (debounce nếu cần, nhưng simple là ok)
   useEffect(() => {
+    if (initialData) return; // Không lưu nếu edit mode
+
     const dataToSave = {
       formData,
       typeQuantities,
@@ -340,27 +358,75 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
     selectedSubjectId,
     selectedChapterId,
     selectedLessonId,
+    initialData,
   ])
 
+  // Load draft SAU KHI grades fetch xong, để tránh race condition
   useEffect(() => {
+    if (initialData) {
+      // Edit mode: clear draft
+      localStorage.removeItem(STORAGE_KEY);
+      hasLoadedDraft.current = true;
+      return;
+    }
+
+    if (hasLoadedDraft.current || grades.length === 0) return;
+
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return
+    if (!saved) {
+      hasLoadedDraft.current = true;
+      return;
+    }
 
+    setIsLoadingDraft(true);
     try {
-      const parsed = JSON.parse(saved)
+      const parsed = JSON.parse(saved);
 
-      if (parsed.formData) setFormData(parsed.formData)
+      console.log("Loading draft from localStorage:", parsed); // Debug log
+
+      // Set non-id fields trước (không trigger fetch)
+      if (parsed.formData) {
+        const newType = parsed.formData.selected_types?.length > 1 
+          ? "mixed" 
+          : (parsed.formData.selected_types?.[0] || "multiple_choice") as any
+        setFormData(prev => ({
+          ...prev,
+          exercise_name: parsed.formData.exercise_name || prev.exercise_name,
+          user_instructions: parsed.formData.user_instructions || prev.user_instructions,
+          selected_types: parsed.formData.selected_types || prev.selected_types,
+          num_questions: parsed.formData.num_questions || prev.num_questions,
+          num_answers: parsed.formData.num_answers || prev.num_answers,
+          difficulty: parsed.formData.difficulty || prev.difficulty,
+          type: newType,
+          // Reset generated fields
+          topic: "",
+          quantity: 0,
+          number_of_answers: 0,
+          description: "",
+          question_text: "",
+          emoji: "",
+          question_type: "",
+          answers: [],
+          explanation: "",
+        }));
+      }
       if (parsed.typeQuantities) setTypeQuantities(parsed.typeQuantities)
 
+      // Set selected ids (sẽ trigger fetch, nhưng isLoadingDraft = true nên không reset)
       if (parsed.selectedGradeId) setSelectedGradeId(parsed.selectedGradeId)
       if (parsed.selectedSubjectId) setSelectedSubjectId(parsed.selectedSubjectId)
       if (parsed.selectedChapterId) setSelectedChapterId(parsed.selectedChapterId)
       if (parsed.selectedLessonId) setSelectedLessonId(parsed.selectedLessonId)
+
+      hasLoadedDraft.current = true;
+      setIsLoadingDraft(false);
     } catch (err) {
       console.error("Lỗi load draft:", err)
+      localStorage.removeItem(STORAGE_KEY);
+      hasLoadedDraft.current = true;
+      setIsLoadingDraft(false);
     }
-  }, [])
-
+  }, [grades, initialData]) // Dependency: grades array thay đổi khi fetch xong, initialData
 
   // Điều chỉnh difficulties
   const difficulties = ["Dễ", "Bình thường", "Khó"]

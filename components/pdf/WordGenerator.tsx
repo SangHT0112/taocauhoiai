@@ -84,7 +84,6 @@ const createWordDocument = ({
       new Paragraph({
         children: [
           new TextRun({ text: `Câu ${index + 1}: `, bold: true }),
-          new TextRun({ text: ` ${q.emoji ?? ""} `, font: "Segoe UI Emoji" }),
           new TextRun({ text: q.question_text, font: "Times New Roman" }),
         ],
         spacing: { after: 200 },

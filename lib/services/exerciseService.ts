@@ -5,14 +5,12 @@ import pool from "@/lib/db"
 export interface QuestionType {
   id: number;
   type_name: string;
-  icon?: string;
   description?: string;
   is_multiple_choice: boolean;
 }
 
 export interface GeneratedQuestion {
   question_text: string;
-  emoji: string;
   explanation: string;
   model_answer?: string;
   answers?: string[];
@@ -216,9 +214,9 @@ async function insertQuestionsWithAnswers(
 
     // Insert Question (giữ nguyên)
     const [qInsertResult] = await connection.execute(
-      `INSERT INTO Questions (exercise_id, order_num, question_text, emoji, question_type_id, explanation, model_answer)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [exerciseId, i + 1, q.question_text, q.emoji || '', qTypeId, q.explanation || '', q.model_answer || null]
+      `INSERT INTO Questions (exercise_id, order_num, question_text, question_type_id, explanation, model_answer)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [exerciseId, i + 1, q.question_text, qTypeId, q.explanation || '', q.model_answer || null]
     ) as [OkPacket, FieldPacket[]];
     const questionId = (qInsertResult as any).insertId;
 

@@ -72,11 +72,7 @@ export default function QuestionsPage() {
             <div className="p-6">
               <QuestionForm
                 onCancel={() => setIsFormOpen(false)}
-                initialData={{
-                  exercise_name: "",
-                  user_instructions: "",
-                  type: "multiple_choice",
-                }}
+                initialData={undefined}  // Pass undefined cho create mode để không clear draft
               />
             </div>
           </Card>
