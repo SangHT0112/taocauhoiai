@@ -127,7 +127,7 @@ export async function insertQuestionTypeIfNotExists(
 
   // Không tồn tại → Insert với tên gốc (không thay đổi)
   const [insertResult] = await connection.execute(
-    'INSERT INTO QuestionTypes (type_name, is_multiple_choice) VALUES (?, ?)',
+    'INSERT INTO questiontypes (type_name, is_multiple_choice) VALUES (?, ?)',
     [typeName, isMultipleChoice]
   ) as [OkPacket, FieldPacket[]];
   const newId = (insertResult as any).insertId;
@@ -157,7 +157,7 @@ async function insertExercise(
 ): Promise<number> {
   const [insertResult] = await connection.execute(
     // ← CẬP NHẬT: SQL - Thay class_id/book_id bằng grade_id/subject_id/chapter_id/lesson_id
-    `INSERT INTO Exercises (name, user_instructions, type, num_questions, num_answers, difficulty, grade_id, subject_id, chapter_id, lesson_id, user_id, question_type_id)
+    `INSERT INTO exercises (name, user_instructions, type, num_questions, num_answers, difficulty, grade_id, subject_id, chapter_id, lesson_id, user_id, question_type_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.name,
@@ -214,7 +214,7 @@ async function insertQuestionsWithAnswers(
 
     // Insert Question (giữ nguyên)
     const [qInsertResult] = await connection.execute(
-      `INSERT INTO Questions (exercise_id, order_num, question_text, question_type_id, explanation, model_answer)
+      `INSERT INTO questions (exercise_id, order_num, question_text, question_type_id, explanation, model_answer)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [exerciseId, i + 1, q.question_text, qTypeId, q.explanation || '', q.model_answer || null]
     ) as [OkPacket, FieldPacket[]];
@@ -226,7 +226,7 @@ async function insertQuestionsWithAnswers(
         const answerText = q.answers[j].replace(/\(correct\)/gi, '').trim();
         const isCorrect = q.answers[j].includes('(correct)');
         await connection.execute(
-          `INSERT INTO Answers (question_id, order_num, answer_text, is_correct) VALUES (?, ?, ?, ?)`,
+          `INSERT INTO answers (question_id, order_num, answer_text, is_correct) VALUES (?, ?, ?, ?)`,
           [questionId, j + 1, answerText, isCorrect]
         );
       }
