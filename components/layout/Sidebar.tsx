@@ -21,8 +21,8 @@ export default function Sidebar({
   /* 🔍 Filter theo search */
   const filteredExercises = useMemo(() => {
     return exercises.filter((ex) =>
-      ex.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ex.lesson_name.toLowerCase().includes(searchQuery.toLowerCase())
+      ex.name.toLowerCase().includes(searchQuery.toLowerCase())
+      // ex.lesson_name.toLowerCase().includes(searchQuery.toLowerCase())
     )
   }, [exercises, searchQuery])
 
@@ -67,7 +67,7 @@ export default function Sidebar({
                 </h4>
 
                 <div className="text-sm text-muted-foreground mt-1 space-y-0.5">
-                  <p>Bài học: {exercise.lesson_name}</p>
+                  {/* <p>Bài học: {exercise.lesson_name}</p> */}
                   <p>Loại: {exercise.type}</p>
                   <p>Số câu: {exercise.num_questions}</p>
                   <p>Độ khó: {exercise.difficulty}</p>

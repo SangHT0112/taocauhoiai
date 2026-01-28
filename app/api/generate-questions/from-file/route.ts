@@ -1,539 +1,635 @@
-// // api/generate-questions/from-file/route.ts
-// import { NextRequest, NextResponse } from "next/server";
-// import { setTimeout } from 'timers/promises';
-// import pool from '@/lib/db';
-// import mammoth from 'mammoth';
-// import {
-//   createExerciseWithQuestions,
-//   fetchQuestionTypes,
-//   QuestionType,
-//   GeneratedQuestion,
-//   insertQuestionTypeIfNotExists,
-//   normalizeForMatch,
-//   InsertedExercise,
-// } from '@/lib/services/exerciseService';
+// api/generate-questions/from-file/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { setTimeout } from 'timers/promises';
+import pool from '@/lib/db';
+import mammoth from 'mammoth';
+import {
+  createExerciseWithQuestions,
+  fetchQuestionTypes,
+  QuestionType,
+  GeneratedQuestion,
+  insertQuestionTypeIfNotExists,
+  normalizeForMatch,
+  InsertedExercise,
+} from '@/lib/services/exerciseService';
 
-// const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
 
-// let keyIndex = 0;
+// Round-robin API keys
+let keyIndex = 0;
+const geminiKeys: string[] = [];
+let i = 1;
+while (process.env[`GEMINI_API_KEY_${i}`]) {
+  geminiKeys.push(process.env[`GEMINI_API_KEY_${i}`]!);
+  i++;
+}
+if (geminiKeys.length === 0 && process.env.GEMINI_API_KEY) {
+  geminiKeys.push(process.env.GEMINI_API_KEY);
+}
+if (geminiKeys.length === 0) {
+  throw new Error("No Gemini API key configured");
+}
 
-// const geminiKeys: string[] = [];
-// let i = 1;
-// while (process.env[`GEMINI_API_KEY_${i}`]) {
-//   geminiKeys.push(process.env[`GEMINI_API_KEY_${i}`]!);
-//   i++;
-// }
-// if (geminiKeys.length === 0) {
-//   if (process.env.GEMINI_API_KEY) geminiKeys.push(process.env.GEMINI_API_KEY);
-//   else throw new Error("No valid Gemini API key found.");
-// }
+// Helper: Detect question types từ raw text (giữ nguyên để hỗ trợ detection ban đầu nếu cần)
+function detectQuestionTypes(extractedText: string): { 
+  multiple_choice_count: number; 
+  open_ended_count: number; 
+  examples: string[];
+  detected_questions: Array<{
+    type: 'multiple_choice' | 'open_ended';
+    content: string;
+    question_number?: string;
+  }>;
+} {
+  // Clean text
+  let cleanText = extractedText.replace(/([a-zA-Z0-9])([A-Z])/g, '$1 $2')
+                               .replace(/([.?!])\s*([a-zA-Z])/g, '$1 $2')
+                               .replace(/\s+/g, ' ')
+                               .trim();
 
-// // Helper: Detect question types từ raw text (FIX: Regex để classify trước khi AI)
-// function detectQuestionTypes(extractedText: string): { 
-//     multiple_choice_count: number; 
-//     open_ended_count: number; 
-//     examples: string[];
-//     detected_questions: Array<{
-//         type: 'multiple_choice' | 'open_ended';
-//         content: string;
-//         question_number?: string;
-//     }>;
-// } {
-//     // Clean text
-//     let cleanText = extractedText.replace(/([a-zA-Z0-9])([A-Z])/g, '$1 $2')
-//                                  .replace(/([.?!])\s*([a-zA-Z])/g, '$1 $2')
-//                                  .replace(/\s+/g, ' ')
-//                                  .trim();
+  const detected_questions: Array<{
+    type: 'multiple_choice' | 'open_ended';
+    content: string;
+    question_number?: string;
+  }> = [];
 
-//     const detected_questions: Array<{
-//         type: 'multiple_choice' | 'open_ended';
-//         content: string;
-//         question_number?: string;
-//     }> = [];
+  // Phát hiện theo cấu trúc Bài 1, Bài 2,...
+  const sections = cleanText.split(/(?:Bài|BÀI)\s*(\d+)[.:]/gi);
+  
+  let mcCount = 0;
+  let oeCount = 0;
 
-//     // Phát hiện theo cấu trúc Bài 1, Bài 2,...
-//     const sections = cleanText.split(/(?:Bài|BÀI)\s*(\d+)[.:]/gi);
+  // Phân tích Bài 1 (trắc nghiệm)
+  const bài1Match = cleanText.match(/Bài\s*1[.:]([\s\S]*?)(?=Bài\s*2|Bài\s*3|$)/i);
+  if (bài1Match) {
+    const bài1Content = bài1Match[1];
+    const mcQuestions = bài1Content.match(/(?:[a-d]\))|\*\*[a-f]\)/gi) || [];
+    mcCount += mcQuestions.length;
     
-//     let mcCount = 0;
-//     let oeCount = 0;
+    const individualQuestions = bài1Content.split(/(?:[a-f]\)|\*\*[a-f]\))/).filter(q => q.trim().length > 10);
+    individualQuestions.forEach((q, idx) => {
+      detected_questions.push({
+        type: 'multiple_choice',
+        content: q.trim().substring(0, 200),
+        question_number: `1.${String.fromCharCode(97 + idx)}`
+      });
+    });
+  }
 
-//     // Phân tích Bài 1 - Chắc chắn là multiple choice
-//     const bài1Match = cleanText.match(/Bài\s*1[.:]([\s\S]*?)(?=Bài\s*2|Bài\s*3|$)/i);
-//     if (bài1Match) {
-//         const bài1Content = bài1Match[1];
-//         // Đếm số câu trắc nghiệm trong Bài 1
-//         const mcQuestions = bài1Content.match(/(?:[a-d]\))|\*\*[a-f]\)/gi) || [];
-//         mcCount += mcQuestions.length;
-        
-//         // Lưu từng câu trắc nghiệm
-//         const individualQuestions = bài1Content.split(/(?:[a-f]\)|\*\*[a-f]\))/).filter(q => q.trim().length > 10);
-//         individualQuestions.forEach((q, idx) => {
-//             detected_questions.push({
-//                 type: 'multiple_choice',
-//                 content: q.trim().substring(0, 200),
-//                 question_number: `1.${String.fromCharCode(97 + idx)}` // 1.a, 1.b,...
-//             });
-//         });
-//     }
+  // Phân tích các bài tự luận (Bài 6, Bài 7, v.v.)
+  const openEndedPattern = /Bài\s*(?:6|7|\d+)[.:]([\s\S]*?)(?=Bài\s*\d|$)/gi;
+  let match;
+  while ((match = openEndedPattern.exec(cleanText)) !== null) {
+    const content = match[1];
+    if (content.includes("Bài giải") || content.includes("Hỏi") || content.includes("bao nhiêu") || content.includes("Tính") || content.includes("Quan sát")) {
+      oeCount++;
+      detected_questions.push({
+        type: 'open_ended',
+        content: content.trim().substring(0, 300),
+        question_number: match[0].match(/Bài\s*(\d+)/i)?.[1]
+      });
+    }
+  }
 
-//     // Phân tích các bài tự luận (Bài 6, Bài 7)
-//     const openEndedPattern = /Bài\s*(?:6|7)[.:]([\s\S]*?)(?=Bài\s*\d|$)/gi;
-//     let match;
-//     while ((match = openEndedPattern.exec(cleanText)) !== null) {
-//         const content = match[1];
-//         if (content.includes("Bài giải") || content.includes("Hỏi") || content.includes("bao nhiêu")) {
-//             oeCount++;
-//             detected_questions.push({
-//                 type: 'open_ended',
-//                 content: content.trim().substring(0, 300),
-//                 question_number: match[0].match(/Bài\s*(\d+)/i)?.[1]
-//             });
-//         }
-//     }
+  // Phát hiện các dạng khác (tổng quát hơn)
+  if (cleanText.includes("Tính nhẩm") || cleanText.includes("Quan sát tranh") || cleanText.includes("Số?") || cleanText.includes(">; <; =")) {
+    oeCount += Math.floor(cleanText.split('Bài').length / 2) - 1; // Ước lượng
+  }
+  
+  // Extract examples
+  const examples = cleanText.match(/(?:\d+\s*[×x]\s*\d+\s*=)|(?:\d+\s*[\+\-\×÷=]\s*)+/g) || [];
 
-//     // Phát hiện các dạng khác
-//     if (cleanText.includes("Tính nhẩm") || cleanText.includes("Quan sát tranh")) {
-//         oeCount += 2; // Ước lượng cho Bài 2, 3
-//     }
-    
-//     if (cleanText.includes("Số?")) {
-//         oeCount++; // Bài 5
-//     }
-    
-//     if (cleanText.includes(">; <; =")) {
-//         oeCount++; // Bài 4
-//     }
+  console.log(`🔍 Detected: Multiple_choice: ${mcCount}, Open_ended: ${oeCount}`);
+  console.log(`📋 Sample detected questions:`, detected_questions.slice(0, 3));
+  
+  return { 
+    multiple_choice_count: mcCount, 
+    open_ended_count: oeCount, 
+    examples, 
+    detected_questions 
+  };
+}
 
-//     // Extract examples
-//     const examples = cleanText.match(/(?:\d+\s*[×x]\s*\d+\s*=)|(?:\d+\s*[\+\-\×÷=]\s*)+/g) || [];
+export async function POST(request: NextRequest) {
+  const connection = await pool.getConnection();
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file') as File;
+    if (!file) return NextResponse.json({ error: "Thiếu file upload" }, { status: 400 });
 
-//     console.log(`🔍 Detected: Multiple_choice: ${mcCount}, Open_ended: ${oeCount}`);
-//     console.log(`📋 Sample detected questions:`, detected_questions.slice(0, 3));
-    
-//     return { 
-//         multiple_choice_count: mcCount, 
-//         open_ended_count: oeCount, 
-//         examples, 
-//         detected_questions 
-//     };
-// }
-// // Helper: Force add answers nếu type choice-based
-// function ensureAnswers(q: Partial<GeneratedQuestion>, targetType: string, numAns: number): void {
-//   if (['multiple_choice', 'true_false', 'multiple_select'].includes(targetType) && (!q.answers || q.answers.length === 0)) {
-//     let dummyAnswers: string[];
-//     if (targetType === 'true_false') {
-//       dummyAnswers = ['Đúng', 'Sai (correct)'];
-//     } else if (targetType === 'multiple_select') {
-//       dummyAnswers = Array(numAns).fill('Sai').map((_, j) => j % 3 === 1 ? 'Đúng (correct)' : 'Sai');  // >1 correct
-//     } else {  // multiple_choice
-//       dummyAnswers = Array(numAns).fill('Sai').map((_, j) => j === 0 ? 'Đúng (correct)' : 'Sai');
-//     }
-//     (q as GeneratedQuestion).answers = dummyAnswers;
-//     console.log(`🔧 Forced answers for ${targetType}:`, dummyAnswers);
-//   } else if (targetType === 'open_ended' && !q.model_answer) {
-//     (q as GeneratedQuestion).model_answer = "Đáp án mẫu dựa trên file.";
-//   }
-// }
+    // Parse other fields safely
+    const rawData = Object.fromEntries(formData.entries());
+    const exercise_name = String(rawData.exercise_name || '');
+    const type_str = String(rawData.type || 'mixed');
+    const selected_types_str = String(rawData.selected_types || '');
+    const type_quantities_str = String(rawData.type_quantities || '');
+    const user_instructions = String(rawData.user_instructions || '');
+    const num_questions_str = String(rawData.num_questions || '10');
+    const num_answers_str = String(rawData.num_answers || '4');
+    const difficulty_str = String(rawData.difficulty || 'Medium');
+    const user_id_str = String(rawData.user_id || '1');
+    const grade_id_str = String(rawData.grade_id || '0');
+    const subject_id_str = String(rawData.subject_id || '0');
+    const chapter_id_str = String(rawData.chapter_id || '0');
+    const lesson_id_str = String(rawData.lesson_id || '0');
 
-// function getDummyAnswers(targetType: string, numAns: number): string[] | undefined {
-//   if (targetType === 'true_false') return ['Đúng', 'Sai (correct)'];
-//   if (targetType === 'multiple_select') {
-//     const base = ['Sai', 'Đúng (correct)', 'Đúng (correct)', 'Sai'];
-//     return base.slice(0, numAns).concat(Array(numAns - base.length).fill('Sai'));
-//   }
-//   if (targetType === 'multiple_choice') return Array(numAns).fill('Sai').map((_, j) => j === 0 ? 'Đúng (correct)' : 'Sai');
-//   return undefined;
-// }
+    // Validate and cast types
+    const exercise_type: 'multiple_choice' | 'open_ended' | 'mixed' | 'true_false' | 'multiple_select' = 
+      ['multiple_choice', 'open_ended', 'mixed', 'true_false', 'multiple_select'].includes(type_str) 
+        ? type_str as any 
+        : 'mixed';
+    const num_questions = Number(num_questions_str);
+    const num_answers = Number(num_answers_str);
+    const difficulty: string = difficulty_str;
+    const user_id = Number(user_id_str);
+    let grade_id = Number(grade_id_str);
+    let subject_id = Number(subject_id_str);
+    let chapter_id = Number(chapter_id_str);
+    let lesson_id = Number(lesson_id_str);
 
-// function processQuestions(questions: GeneratedQuestion[], typeDistribution: { type: string; count: number }[], num_questions: number, effectiveNumAnswers: number, typesToUse: string[]): GeneratedQuestion[] {
-//   // Enforce distribution
-//   const currentCounts = new Map(typeDistribution.map(({ type }) => [type, 0]));
-//   questions.forEach(q => q.suggested_type && currentCounts.set(q.suggested_type, (currentCounts.get(q.suggested_type) || 0) + 1));
+    let selected_types: string[] = [];
+    let type_quantities_input: Record<string, number> = {};
+    try {
+      if (selected_types_str) {
+        selected_types = JSON.parse(selected_types_str);
+      }
+      if (type_quantities_str) {
+        type_quantities_input = JSON.parse(type_quantities_str);
+      }
+    } catch (parseErr) {
+      console.warn('⚠️ Parse error for types/quantities:', parseErr);
+    }
 
-//   // Assign missing types
-//   const questionsToAssign = questions.filter(q => !typesToUse.includes(q.suggested_type || ''));
-//   let distIndex = 0;
-//   questionsToAssign.forEach(q => {
-//     const targetType = typeDistribution[distIndex % typeDistribution.length].type;
-//     q.suggested_type = targetType;
-//     ensureAnswers(q, targetType, effectiveNumAnswers);
-//     currentCounts.set(targetType, (currentCounts.get(targetType) || 0) + 1);
-//     distIndex++;
-//   });
+    // Validation (tương tự main route, nhưng optional cho file)
+    if (!user_id) return NextResponse.json({ error: "Thiếu user_id" }, { status: 400 });
+    if (!num_questions || num_questions < 1 || num_questions > 50) {
+      return NextResponse.json({ error: "Số câu hỏi phải từ 1-50" }, { status: 400 });
+    }
 
-//   // Sort by type order
-//   questions.sort((a, b) => {
-//     const aOrder = typeDistribution.findIndex(({ type }) => type === (a.suggested_type || ''));
-//     const bOrder = typeDistribution.findIndex(({ type }) => type === (b.suggested_type || ''));
-//     return aOrder - bOrder;
-//   });
+    // Set defaults nếu không cung cấp (cho file upload)
+    if (!grade_id || grade_id <= 0) grade_id = 2; // Default lớp 2 (tiểu học)
+    if (!subject_id || subject_id <= 0) subject_id = 1; // Default Toán
+    if (!chapter_id || chapter_id <= 0) chapter_id = 1; // Default chương 1
+    if (!lesson_id || lesson_id <= 0) lesson_id = 1; // Default bài 1
 
-//   // Force answers cho tất cả choice-based
-//   questions.forEach(q => {
-//     if (q.suggested_type && ['multiple_choice', 'true_false', 'multiple_select'].includes(q.suggested_type) && (!q.answers || q.answers.length < 2)) {
-//       ensureAnswers(q, q.suggested_type, effectiveNumAnswers);
-//     }
-//   });
+    // Validate & extract file
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.docx') && !fileName.endsWith('.doc')) return NextResponse.json({ error: "Chỉ hỗ trợ DOCX/DOC" }, { status: 400 });
 
-//   // Pad dummies
-//   let padIndex = 0;
-//   while (questions.length < num_questions) {
-//     const targetType = typeDistribution[padIndex % typeDistribution.length].type;
-//     const dummyQ: GeneratedQuestion = {
-//       question_text: `Câu hỏi mẫu ${questions.length + 1} dựa trên file.`,
-//       emoji: "❓",
-//       explanation: "Giải thích mẫu từ nội dung file.",
-//       suggested_type: targetType,
-//     };
-//     ensureAnswers(dummyQ, targetType, effectiveNumAnswers);
-//     questions.push(dummyQ);
-//     padIndex++;
-//   }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const result = await mammoth.convertToHtml({ buffer });
+    let extractedText = result.value
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!extractedText) return NextResponse.json({ error: "File rỗng hoặc không đọc được" }, { status: 400 });
 
-//   // Check real questions (threshold 0.3)
-//   const realQuestions = questions.filter(q => !q.question_text.includes('mẫu') && !q.question_text.includes('fix') && q.question_text.trim().length > 10);
-//   if (realQuestions.length < num_questions * 0.3) throw new Error("Quá nhiều dummy, retry");
+    console.log(`📁 File: ${fileName}, extracted length: ${extractedText.length}`);
+    console.log("📄 Preview:", extractedText.substring(0, 200));
 
-//   console.log("📊 Post-process: Types enforced, answers added for choice-based");
-//   return questions.slice(0, num_questions);
-// }
+    // Không fetch lesson info từ DB, luôn dùng nội dung từ file
+    let lessonTitle = '';
+    let enrichedLessonInfo = user_instructions.trim() || `Nội dung từ file "${fileName}": ${extractedText.substring(0, 500)}...`;
+    console.log("📚 Using file content for lesson info:", enrichedLessonInfo.substring(0, 150) + '...');
 
-// function extractAndRepairJson(text: string, num_questions: number, typeDistribution: { type: string; count: number }[], effectiveNumAnswers: number, typesToUse: string[]): GeneratedQuestion[] {
-//   if (!text.endsWith(']')) text += ']';
-//   const jsonMatch = text.match(/\[[\s\S]*\]/);
-//   if (!jsonMatch) throw new Error("Không tìm thấy JSON");
+    // Detect types từ file để hỗ trợ type_quantities/selected_types nếu không cung cấp
+    const { multiple_choice_count: detected_mc, open_ended_count: detected_oe } = detectQuestionTypes(extractedText);
+    const detectedTotal = detected_mc + detected_oe;
 
-//   let jsonStr = jsonMatch[0]
-//     .replace(/(\r\n|\n|\r)/g, " ")
-//     .replace(/,\s*([}\]])/g, "$1")
-//     .replace(/:\s*([A-Za-z0-9_]+)\s*(?=[,}])/g, ':"$1"')
-//     .replace(/([a-zA-Z0-9_]+)\s*:/g, '"$1":');
+    // Nếu không có input, dùng detection để set default mixed
+    if (selected_types.length === 0 && Object.keys(type_quantities_input).length === 0) {
+      selected_types = detectedTotal > 0 && detected_mc / detectedTotal > 0.5 ? ['multiple_choice', 'open_ended'] : ['open_ended'];
+      const mcQty = Math.floor(num_questions * (detected_mc / detectedTotal || 0.7));
+      type_quantities_input = { multiple_choice: mcQty, open_ended: num_questions - mcQty };
+    }
 
-//   try {
-//     let questions = JSON.parse(jsonStr);
-//     if (!Array.isArray(questions)) throw new Error("Not array");
-//     // Filter invalid & force type nếu suggested_type ngoài typesToUse
-//     questions = questions.filter((q: any) => q.question_text && q.question_text.trim().length > 5).map((q: any) => {
-//       if (!typesToUse.includes(q.suggested_type)) {
-//         q.suggested_type = typesToUse[0];
-//         console.log(`🔧 Repaired type for q: ${q.question_text.substring(0, 50)}... → ${q.suggested_type}`);
-//       }
-//       return q as GeneratedQuestion;
-//     });
-//     return processQuestions(questions, typeDistribution, num_questions, effectiveNumAnswers, typesToUse);
-//   } catch {
-//     // Manual parse objects
-//     const objMatches = jsonStr.match(/\{[\s\S]*?\}/g) || [];
-//     const fixedQuestions = objMatches.slice(0, num_questions).map((objStr, j) => {
-//       try {
-//         const q: Partial<GeneratedQuestion> = JSON.parse(objStr.replace(/,\s*([}\]])/g, "$1"));
-//         q.question_text ||= `Câu hỏi ${j + 1} từ file`;
-//         q.emoji ||= "📚";
-//         q.explanation ||= "Giải thích dựa trên nội dung file.";
-//         const targetType = typesToUse[j % typesToUse.length] || 'multiple_choice';
-//         q.suggested_type ||= targetType;
-//         ensureAnswers(q, targetType, effectiveNumAnswers);
-//         return q as GeneratedQuestion;
-//       } catch {
-//         const dummyType = typesToUse[j % typesToUse.length] || 'multiple_choice';
-//         const dummyQ: GeneratedQuestion = {
-//           question_text: `Câu hỏi ${j + 1} (fix từ file).`,
-//           emoji: "❓",
-//           explanation: "Parse error, dùng mẫu từ file.",
-//           suggested_type: dummyType,
-//         };
-//         ensureAnswers(dummyQ, dummyType, effectiveNumAnswers);
-//         return dummyQ;
-//       }
-//     });
-//     return processQuestions(fixedQuestions, typeDistribution, num_questions, effectiveNumAnswers, typesToUse);
-//   }
-// }
+    // Xử lý types & distribution (copy từ main)
+    let typesToUse: string[] = [];
+    let typeDistribution: { type: string; count: number }[] = [];
 
-// export async function POST(request: NextRequest) {
-//   let connection;
-//   try {
-//     const formData = await request.formData();
-//     const file = formData.get('file') as File;
-//     const userIdStr = formData.get('user_id')?.toString();
+    if (Object.keys(type_quantities_input).length > 0) {
+      const validEntries = Object.entries(type_quantities_input)
+        .filter((entry): entry is [string, number] => {
+          const [, count] = entry;
+          return typeof count === 'number' && count > 0 && Number.isInteger(count);
+        });
+      typesToUse = validEntries.map(([type]) => type);
+      typeDistribution = validEntries.map(([type, count]) => ({ type, count }));
 
-//     if (!file) return NextResponse.json({ error: "Không tìm thấy file" }, { status: 400 });
+      const totalFromQuantities = typeDistribution.reduce((sum, d) => sum + d.count, 0);
+      if (totalFromQuantities !== num_questions) {
+        return NextResponse.json({ error: `Tổng số lượng loại (${totalFromQuantities}) không khớp ${num_questions}` }, { status: 400 });
+      }
+    } else {
+      typesToUse = selected_types?.length ? selected_types : 
+                   (exercise_type === 'multiple_choice' ? ['multiple_choice'] :
+                    exercise_type === 'open_ended' ? ['open_ended'] :
+                    exercise_type === 'true_false' ? ['true_false'] :
+                    exercise_type === 'multiple_select' ? ['multiple_select'] :
+                    ['multiple_choice', 'open_ended']); // Default mixed cho file
 
-//     let user_id = userIdStr && !isNaN(Number(userIdStr)) ? Number(userIdStr) : 1;
-//     console.log(`📁 File: ${file.name}, user_id: ${user_id}`);
+      const numPerType = Math.floor(num_questions / typesToUse.length);
+      const remainder = num_questions % typesToUse.length;
+      typeDistribution = typesToUse.map((type, index) => ({
+        type,
+        count: numPerType + (index < remainder ? 1 : 0),
+      }));
+    }
 
-//     // Validate & extract file
-//     const fileName = file.name.toLowerCase();
-//     if (!fileName.endsWith('.docx') && !fileName.endsWith('.doc')) return NextResponse.json({ error: "Chỉ hỗ trợ DOCX/DOC" }, { status: 400 });
+    if (typesToUse.length === 0) {
+      return NextResponse.json({ error: "Phải chọn ít nhất 1 loại câu hỏi" }, { status: 400 });
+    }
 
-//     const buffer = Buffer.from(await file.arrayBuffer());
-//     const result = await mammoth.convertToHtml({ buffer });
-//     let extractedText = result.value
-//       .replace(/<[^>]*>/g, ' ')
-//       .replace(/\s+/g, ' ')
-//       .trim();
-//     if (!extractedText) return NextResponse.json({ error: "File rỗng" }, { status: 400 });
+    const distributionStr = typeDistribution.map(({ type, count }) => `${count} câu ${type}`).join(', ');
+    const isMixed = typesToUse.length > 1 || exercise_type === 'mixed';
+    const choiceBasedTypes = ['multiple_choice', 'true_false', 'multiple_select'];
+    const isChoiceBased = !isMixed && choiceBasedTypes.includes(typesToUse[0]);
 
-//     // Detect types & examples
-//     const { multiple_choice_count: mcCount, open_ended_count: oeCount, examples } = detectQuestionTypes(extractedText);
-//     const exampleStr = examples.length > 0 ? `Ví dụ từ file: ${examples.slice(0, 3).join('; ')}.` : '';
-//     const totalDetected = mcCount + oeCount;
-//     const mcRatio = totalDetected > 0 ? Math.round((mcCount / totalDetected) * 10) : 7;  // Default 70%
-//     const oeRatio = 10 - mcRatio;
+    let effectiveNumAnswers = num_answers;
+    if (isChoiceBased && !effectiveNumAnswers) effectiveNumAnswers = 4;
+    if (typesToUse[0] === 'true_false') effectiveNumAnswers = 2;
 
-//     console.log("📄 Full extracted text length:", extractedText.length);
-//     console.log("📄 Preview:", extractedText.substring(0, 200));
+    if (isChoiceBased && (!effectiveNumAnswers || effectiveNumAnswers < 2 || effectiveNumAnswers > 5)) {
+      return NextResponse.json({ error: "Số đáp án phải từ 2-5 cho trắc nghiệm" }, { status: 400 });
+    }
 
-//     // Validate user
-//     connection = await pool.getConnection();
-//     const [userRows] = await connection.execute('SELECT id FROM users WHERE id = ?', [user_id]);
-//     if ((userRows as any[]).length === 0) return NextResponse.json({ error: `User ${user_id} không tồn tại` }, { status: 400 });
+    // Question type ID (copy từ main)
+    const existingTypes: QuestionType[] = await fetchQuestionTypes(connection);
+    let questionTypeId: number;
 
-//     // AI Analysis
-//     const maxTextLen = 3000;
-//     const textChunk = extractedText.length > maxTextLen ? extractedText.substring(0, maxTextLen) + "..." : extractedText;
-// const analysisPrompt = `Phân tích CHI TIẾT file giáo dục Toán lớp 2 về phép nhân. 
+    if (!isMixed) {
+      const inputNormalized = normalizeForMatch(typesToUse[0]);
+      const matchedType = existingTypes.find(t => normalizeForMatch(t.type_name) === inputNormalized);
+      if (matchedType) {
+        questionTypeId = matchedType.id;
+      } else {
+        const isMulti = choiceBasedTypes.includes(typesToUse[0]);
+        questionTypeId = await insertQuestionTypeIfNotExists(connection, typesToUse[0], isMulti, existingTypes);
+      }
+    } else {
+      const defaultNormalized = normalizeForMatch('multiple choice');
+      const defaultMultiType = existingTypes.find(t => normalizeForMatch(t.type_name) === defaultNormalized);
+      questionTypeId = defaultMultiType?.id || existingTypes[0]?.id || 1;
+    }
 
-// CẤU TRÚC FILE HIỆN TẠI:
-// "${textChunk}"
+    // Prompt building (copy từ main, nhưng integrate extractedText vào enrichedLessonInfo)
+    const levelDescription = 'học sinh tiểu học, ngôn ngữ đơn giản, rõ ràng, gần gũi';
+    const subjectHint = enrichedLessonInfo.toLowerCase().includes('toán') ? 'Toán học' :
+                        enrichedLessonInfo.toLowerCase().includes('tiếng việt') ? 'Tiếng Việt' : 'kiến thức phổ thông';
 
-// PHÂN TÍCH CỤ THỂ:
-// 1. Bài 1 (Khoanh tròn): ${mcCount} câu TRẮC NGHIỆM (A, B, C, D)
-//    - Mỗi câu có 4 lựa chọn
-//    - Dạng: Chọn đáp án đúng, điền dấu, bài toán thực tế
+    const typesStr = typesToUse.join(', ');
+    const typeList = existingTypes.map(t => `${t.id}: ${t.type_name}`).join('; ');
 
-// 2. Bài 2 (Tính nhẩm): TỰ LUẬN - tính kết quả phép nhân
+    let objectStr: string;
+    if (isMixed) {
+      objectStr = '{ "question_text": "...", "answers"?: ["...", "... (correct)", ...], "model_answer"?: "...", "explanation": "...", "suggested_type": "multiple_choice|true_false|multiple_select|open_ended" }';
+    } else if (isChoiceBased) {
+      objectStr = `{ "question_text": "...", "answers": ["...", "... (correct)", ...], "explanation": "...", "suggested_type": "${typesToUse[0]}" }`;
+    } else {
+      objectStr = '{ "question_text": "...", "model_answer": "...", "explanation": "...", "suggested_type": "open_ended" }';
+    }
 
-// 3. Bài 3 (Quan sát tranh): TỰ LUẬN - viết phép nhân từ tranh
+    let specificReq = '';
+    if (isMixed) {
+      specificReq = `- Phân bổ: ${distributionStr}
+- multiple_choice: ${effectiveNumAnswers || 4} đáp án, đúng 1 "(correct)"
+- true_false: 2 đáp án ("Đúng","Sai"), 1 "(correct)"
+- multiple_select: nhiều "(correct)" (>1)
+- open_ended: chỉ "model_answer" ngắn gọn`;
+    } else if (isChoiceBased) {
+      const t = typesToUse[0];
+      if (t === 'true_false') specificReq = `- 2 đáp án ("Đúng","Sai"), 1 "(correct)"`;
+      else if (t === 'multiple_select') specificReq = `- ${effectiveNumAnswers} đáp án, có thể nhiều "(correct)"`;
+      else specificReq = `- ${effectiveNumAnswers} đáp án, đúng 1 "(correct)"`;
+    } else {
+      specificReq = `- Câu hỏi mở, có "model_answer" ngắn gọn`;
+    }
 
-// 4. Bài 4 (>; <; =): TỰ LUẬN - so sánh kết quả
+    const userReqPart = user_instructions.trim() 
+      ? `YÊU CẦU CỤ THỂ TỪ GIÁO VIÊN (ƯU TIÊN TUÂN THỦ CAO NHẤT):\n${user_instructions.trim()}\n\n`
+      : '';
 
-// 5. Bài 5 (Số?): TỰ LUẬN - điền số vào bảng
+    const contentPart = `NỘI DUNG BÀI HỌC TỪ FILE VÀ SÁCH GIÁO KHOA:\n${enrichedLessonInfo}\n\n`;
 
-// 6. Bài 6-7: TỰ LUẬN - giải bài toán có lời văn
+    const generatePrompt = `
+Trả lời DUY NHẤT bằng mảng JSON hợp lệ chứa đúng ${num_questions} object. KHÔNG thêm bất kỳ text nào ngoài JSON.
 
-// YÊU CẦU TẠO CÂU HỎI: Tạo ĐÚNG SỐ LƯỢNG và ĐÚNG LOẠI như file gốc.
+Mỗi object: ${objectStr}
 
-// Trả lời DUY NHẤT JSON:
-// {
-//   "exercise_name": "Ôn tập phép nhân lớp 2",
-//   "lesson_name": "Phép nhân cơ bản",
-//   "subject": "Toán",
-//   "grade_level": "Lớp 2",
-//   "difficulty": "Easy",
-//   "num_questions": ${Math.max(10, mcCount + oeCount)}, // Tổng số câu trong file
-//   "type": "mixed",
-//   "selected_types": ["multiple_choice", "open_ended"],
-//   "type_quantities": {"multiple_choice": ${mcCount}, "open_ended": ${oeCount}},
-//   "num_answers": 4,
-//   "topic_summary": "File gồm ${mcCount} câu trắc nghiệm (Bài 1) và ${oeCount} câu tự luận (Bài 2-7). Nội dung: chuyển tổng thành phép nhân, tính nhẩm bảng cửu chương 2 và 5, so sánh kết quả, giải bài toán thực tế về phép nhân.",
-//   "file_structure": "Bài 1 (MC) → Bài 2-7 (Open-ended)"
-// }`;
+TẠO CÂU HỎI THEO THỨ TỰ ƯU TIÊN:
 
-//     // Retry cho analysis
-//     let analysisJson = {
-//       exercise_name: "Ôn tập phép nhân từ file",
-//       lesson_name: "Phép nhân lớp 2",
-//       subject: "Toán",
-//       grade_level: "Lớp 2",
-//       difficulty: "Easy",
-//       num_questions: 10,
-//       type: "mixed" as const,
-//       selected_types: ["multiple_choice", "open_ended"],
-//       type_quantities: { multiple_choice: Math.round(10 * mcRatio / 10), open_ended: Math.round(10 * oeRatio / 10) },
-//       num_answers: 4,
-//       topic_summary: `File về phép nhân: ${mcCount} trắc nghiệm, ${oeCount} tự luận. ${exampleStr} (fallback).`
-//     };
+${userReqPart}${contentPart}
 
-//     let analysisRetry = 0;
-//     const maxAnalysisRetries = 2;
-//     while (analysisRetry <= maxAnalysisRetries) {
-//       const currentKey = geminiKeys[keyIndex++ % geminiKeys.length];
-//       const analysisRes = await fetch(`${GEMINI_API_URL}?key=${currentKey}`, {
-//         method: "POST",
-//         headers: { "Content-Type": "application/json" },
-//         body: JSON.stringify({
-//           contents: [{ parts: [{ text: analysisPrompt }] }],
-//           generationConfig: { temperature: 0.3, maxOutputTokens: 1000 },
-//         }),
-//       });
+YÊU CẦU CHUNG:
+- Ngôn ngữ: ${levelDescription}
+- Chủ đề: ${subjectHint}
+- Độ khó: ${difficulty}
+- Phân bố loại: ${distributionStr}
+- ${specificReq}
+- Câu hỏi ngắn (<50 chữ)
+- Explanation học thuật, <30 chữ
+- suggested_type chỉ dùng trong: ${typesStr}
+`.trim();
 
-//       if (analysisRes.ok) {
-//         const analysisText = (await analysisRes.json()).candidates?.[0]?.content?.parts?.[0]?.text || '';
-//         console.log("🧠 Analysis raw:", analysisText.substring(0, 200));
-//         const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
-//         if (jsonMatch) {
-//           try {
-//             const parsed = JSON.parse(jsonMatch[0]);
-//             analysisJson = { ...analysisJson, ...parsed };
-//             console.log("✅ Analysis success:", JSON.stringify(analysisJson, null, 2));
-//             break;
-//           } catch (parseErr) {
-//             console.warn("⚠️ Analysis parse failed:", parseErr);
-//           }
-//         }
-//       } else {
-//         console.warn(`⚠️ Analysis API error (attempt ${analysisRetry + 1}):`, await analysisRes.text());
-//       }
+    // Helper functions (copy từ main)
+    function sortQuestionsByTypeOrder(questions: GeneratedQuestion[]): GeneratedQuestion[] {
+      if (!isMixed) return questions;
+      const typeOrderMap = new Map(typeDistribution.map(({ type }, index) => [type, index]));
+      return questions.sort((a, b) => {
+        const aOrder = typeOrderMap.get(a.suggested_type || '') ?? typeDistribution.length;
+        const bOrder = typeOrderMap.get(b.suggested_type || '') ?? typeDistribution.length;
+        return aOrder - bOrder;
+      });
+    }
 
-//       analysisRetry++;
-//       if (analysisRetry <= maxAnalysisRetries) await setTimeout(1000 * analysisRetry);
-//     }
+    function enforceTypeDistribution(questions: GeneratedQuestion[]): GeneratedQuestion[] {
+      if (!isMixed) return questions;
+      const currentCounts = new Map<string, number>();
+      typesToUse.forEach(type => currentCounts.set(type, 0));
+      questions.forEach((q: GeneratedQuestion) => {
+        if (q.suggested_type && typesToUse.includes(q.suggested_type)) {
+          currentCounts.set(q.suggested_type, (currentCounts.get(q.suggested_type) || 0) + 1);
+        }
+      });
+      console.log("Current counts before enforce:", Object.fromEntries(currentCounts));
+      const questionsToAssign: GeneratedQuestion[] = [];
+      questions.forEach((q: GeneratedQuestion) => {
+        if (!q.suggested_type || !typesToUse.includes(q.suggested_type)) {
+          questionsToAssign.push(q);
+        }
+      });
+      typeDistribution.forEach(({ type, count: required }) => {
+        const current = currentCounts.get(type) || 0;
+        if (current > required) {
+          const excess = current - required;
+          const typeQuestions = questions.filter((q: GeneratedQuestion) => q.suggested_type === type);
+          for (let i = 0; i < excess && i < typeQuestions.length; i++) {
+            questionsToAssign.push(typeQuestions[typeQuestions.length - 1 - i]);
+          }
+          currentCounts.set(type, required);
+        }
+      });
+      let distIndex = 0;
+      questionsToAssign.forEach((q: GeneratedQuestion) => {
+        const targetType = typeDistribution[distIndex % typeDistribution.length].type;
+        const required = typeDistribution[distIndex % typeDistribution.length].count;
+        const current = currentCounts.get(targetType) || 0;
+        if (current < required) {
+          q.suggested_type = targetType;
+          currentCounts.set(targetType, current + 1);
+        }
+        distIndex++;
+      });
+      console.log("Final counts after enforce:", Object.fromEntries(currentCounts));
+      return questions;
+    }
 
-//     // Destructure & validate
-//     const { exercise_name, lesson_name, type: exercise_type, selected_types, type_quantities, num_questions, num_answers, difficulty, topic_summary } = analysisJson;
-//     const validatedType = (['mixed', 'multiple_choice', 'open_ended', 'true_false', 'multiple_select'] as const).includes(exercise_type as any) ? exercise_type as "mixed" | "multiple_choice" | "open_ended" | "true_false" | "multiple_select" : 'mixed';
-//     if (!exercise_name?.trim() || num_questions < 1 || num_questions > 50) return NextResponse.json({ error: "Dữ liệu AI không hợp lệ" }, { status: 400 });
+    function getDummyAnswers(targetType: string, numAns?: number): string[] | undefined {
+      const effNum = numAns || 4;
+      if (targetType === 'true_false') {
+        return ['Đúng', 'Sai (correct)'];
+      } else if (targetType === 'multiple_select') {
+        const base = ['Sai', 'Đúng (correct)', 'Đúng (correct)', 'Sai'];
+        return base.slice(0, effNum).concat(Array(effNum - base.length).fill('Sai'));
+      } else if (targetType === 'multiple_choice') {
+        return Array(effNum).fill('Mẫu').map((_, i) => i === 0 ? 'Mẫu (correct)' : 'Mẫu');
+      }
+      return undefined;
+    }
 
-//     let typesToUse = selected_types || ['multiple_choice', 'open_ended'];
-//     let typeDistribution = Object.entries(type_quantities || {}).filter(([, count]) => count > 0).map(([type, count]) => ({ type, count: Number(count) }));
-//     if (typeDistribution.length === 0) {
-//       const perType = Math.floor(num_questions / typesToUse.length);
-//       const remainder = num_questions % typesToUse.length;
-//       typeDistribution = typesToUse.map((type, idx) => ({ type, count: perType + (idx < remainder ? 1 : 0) }));
-//     }
-//     const total = typeDistribution.reduce((sum, { count }) => sum + count, 0);
-//     if (total !== num_questions) return NextResponse.json({ error: `Tổng câu hỏi không khớp: ${total}` }, { status: 400 });
+    function extractAndRepairJson(text: string): GeneratedQuestion[] {
+      if (!text.trim().endsWith(']')) {
+        text = text.trim() + ']';
+        console.log('🔧 Appended ] to fix truncate');
+      }
 
-//     const isMixed = typesToUse.length > 1 || validatedType === 'mixed';
-//     const choiceBasedTypes = ['multiple_choice', 'true_false', 'multiple_select'];
-//     const isChoiceBased = !isMixed && choiceBasedTypes.includes(typesToUse[0]);
-//     let effectiveNumAnswers = num_answers || (isChoiceBased ? 4 : 0);
-//     if (typesToUse[0] === 'true_false') effectiveNumAnswers = 2;
-//     if (isChoiceBased && (effectiveNumAnswers < 2 || effectiveNumAnswers > 5)) return NextResponse.json({ error: "Số đáp án 2-5" }, { status: 400 });
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error("Không tìm thấy mảng JSON");
+      let jsonStr = jsonMatch[0];
 
-//     // Question types
-//     const existingTypes = await fetchQuestionTypes(connection);
-//     let questionTypeId = !isMixed ? 
-//       (existingTypes.find(t => normalizeForMatch(t.type_name) === normalizeForMatch(typesToUse[0]))?.id || 
-//        await insertQuestionTypeIfNotExists(connection, typesToUse[0], choiceBasedTypes.includes(typesToUse[0]), existingTypes)) :
-//       (existingTypes.find(t => normalizeForMatch(t.type_name) === normalizeForMatch('multiple choice'))?.id || 1);
+      const lastBracket = jsonStr.lastIndexOf("]");
+      if (lastBracket > 0) jsonStr = jsonStr.substring(0, lastBracket + 1);
 
-//     // Generate prompt
-//     const levelDesc = analysisJson.grade_level ? `học sinh ${analysisJson.grade_level}` : 'tiểu học';
-//     const subjectHint = analysisJson.subject || 'Toán';
-//     const typeList = existingTypes.map(t => `${t.id}: ${t.type_name}`).join('; ');
-//     const typesStr = typesToUse.join(', ');
-//     const distributionStr = typeDistribution.map(({ count, type }) => `${count} ${type}`).join(', ');
-    
-//     const objectStr = isMixed ? '{ "question_text": "...", "emoji": "...", "answers"?: [...], "model_answer"?: "...", "explanation": "...", "suggested_type": "..." }' :
-//                        isChoiceBased ? `{ "question_text": "...", "emoji": "...", "answers": [...], "explanation": "...", "suggested_type": "${typesToUse[0]}" }` :
-//                        '{ "question_text": "...", "emoji": "...", "model_answer": "...", "explanation": "...", "suggested_type": "open_ended" }';
+      try {
+        let questions = JSON.parse(jsonStr);
+        if (!Array.isArray(questions)) throw new Error("Not array");
+        questions = enforceTypeDistribution(questions);
+        questions = sortQuestionsByTypeOrder(questions);
+        let padIndex = 0;
+        while (questions.length < num_questions) {
+          const targetType = typeDistribution[padIndex % typeDistribution.length].type;
+          const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
+          questions.push({
+            question_text: `Câu hỏi mẫu ${questions.length + 1} từ file.`,
+            explanation: "Giải thích mẫu từ file.",
+            suggested_type: targetType,
+            ...(targetType !== 'open_ended' && { answers: dummyAnswers }),
+            ...(targetType === 'open_ended' && { model_answer: "Đáp án mẫu từ file." }),
+          });
+          padIndex++;
+          questions = enforceTypeDistribution(questions);
+          questions = sortQuestionsByTypeOrder(questions);
+        }
 
-//     const specificReq = isMixed ? `- MIMIC FILE: Phân bổ ${distributionStr} (${mcRatio}% multiple_choice như Bài 1: 4 options A-D, 1 "(correct)"; ${oeRatio}% open_ended như Bài 6: model_answer chi tiết, KHÔNG answers. Dùng ví dụ: ${exampleStr}` :
-//                                   isChoiceBased ? `- 4 options A-D, 1 "(correct)", như Bài 1.` : '- Model_answer như bài giải tự luận.';
+        const realQuestions = questions.filter((q: GeneratedQuestion) => 
+          !q.question_text.includes('mẫu') && 
+          !q.question_text.includes('tự động fix') && 
+          q.question_text.trim().length > 10
+        );
+        if (realQuestions.length < num_questions * 0.5) {
+          throw new Error("Quá nhiều dummy (output có thể bị truncate), cần retry");
+        }
 
-//     const fullTextChunk = extractedText.length > 1500 ? extractedText.substring(0, 1500) + `... (mimic: ${mcCount} trắc nghiệm, ${oeCount} tự luận)` : extractedText;
-//     const generatePrompt = `Tạo câu hỏi Toán lớp 2 về phép nhân theo ĐÚNG CẤU TRÚC file mẫu:
+        return questions.slice(0, num_questions);
+      } catch (parseErr) {
+        console.error("⚠️ Raw parse failed, applying minimal repairs:", parseErr);
+        let repairedStr = jsonStr
+          .replace(/(\r\n|\n|\r)/g, " ")
+          .replace(/,\s*([}\]])/g, "$1")
+          .replace(/:\s*([A-Za-z0-9_]+)\s*(?=[,}])/g, ':"$1"');
+        try {
+          let questions = JSON.parse(repairedStr);
+          if (!Array.isArray(questions)) throw new Error("Not array after repair");
+          questions = enforceTypeDistribution(questions);
+          questions = sortQuestionsByTypeOrder(questions);
+          let padIndex = 0;
+          while (questions.length < num_questions) {
+            const targetType = typeDistribution[padIndex % typeDistribution.length].type;
+            const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
+            questions.push({
+              question_text: `Câu hỏi mẫu ${questions.length + 1} từ file.`,
+              explanation: "Giải thích mẫu từ file.",
+              suggested_type: targetType,
+              ...(targetType !== 'open_ended' && { answers: dummyAnswers }),
+              ...(targetType === 'open_ended' && { model_answer: "Đáp án mẫu từ file." }),
+            });
+            padIndex++;
+            questions = enforceTypeDistribution(questions);
+            questions = sortQuestionsByTypeOrder(questions);
+          }
 
-//     CẤU TRÚC FILE MẪU (phải tuân theo):
-//     1. BÀI 1: ${mcCount} câu TRẮC NGHIỆM (multiple_choice)
-//     - Mỗi câu có 4 đáp án A, B, C, D
-//     - Chỉ MỘT đáp án đúng, ghi "(correct)" sau đáp án đúng
-//     - Dạng câu: Khoanh tròn chữ cái đặt trước câu trả lời đúng
+          const realQuestions = questions.filter((q: GeneratedQuestion) => 
+            !q.question_text.includes('mẫu') && 
+            !q.question_text.includes('tự động fix') && 
+            q.question_text.trim().length > 10
+          );
+          if (realQuestions.length < num_questions * 0.5) {
+            throw new Error("Quá nhiều dummy sau repair, cần retry");
+          }
 
-//     2. BÀI 2 đến BÀI 7: ${oeCount} câu TỰ LUẬN (open_ended)
-//     - Bài 2: Tính nhẩm (không cần lời giải)
-//     - Bài 3: Quan sát tranh và viết phép nhân
-//     - Bài 4: Điền dấu >, <, =
-//     - Bài 5: Điền số vào bảng
-//     - Bài 6-7: Giải bài toán có lời văn (có "Bài giải")
+          return questions.slice(0, num_questions);
+        } catch (repairErr) {
+          console.error("⚠️ Repair failed, attempting manual fix:", repairErr);
+          const objMatches = repairedStr.match(/\{[\s\S]*?\}/g) || [];
+          const fixedQuestions: GeneratedQuestion[] = [];
+          objMatches.slice(0, num_questions).forEach((objStr, i) => {
+            try {
+              const q: Partial<GeneratedQuestion> = JSON.parse(objStr.replace(/,\s*([}\]])/g, "$1"));
+              q.question_text = q.question_text || `Câu hỏi ${i + 1} từ file`;
+              q.explanation = q.explanation || "Giải thích mẫu từ file.";
+              q.suggested_type = q.suggested_type || typesToUse[0];
+              const st = q.suggested_type;
+              if (st !== 'open_ended') {
+                const dummyAnswers = getDummyAnswers(st, effectiveNumAnswers);
+                q.answers = q.answers || dummyAnswers;
+              } else {
+                q.model_answer = q.model_answer || "Đáp án mẫu từ file.";
+              }
+              fixedQuestions.push(q as GeneratedQuestion);
+            } catch {
+              let dummyType: string;
+              if (isMixed) {
+                const distIndex = Math.floor(fixedQuestions.length / (num_questions / typeDistribution.length)) % typesToUse.length;
+                dummyType = typeDistribution[distIndex].type;
+              } else {
+                dummyType = typesToUse[0];
+              }
+              const dummyAnswers = getDummyAnswers(dummyType, effectiveNumAnswers);
+              fixedQuestions.push({
+                question_text: `Câu hỏi ${i + 1} (tự động fix từ file).`,
+                explanation: "Lỗi parse, dùng mẫu từ file.",
+                suggested_type: dummyType,
+                ...(dummyType !== 'open_ended' && { answers: dummyAnswers }),
+                ...(dummyType === 'open_ended' && { model_answer: "Mẫu từ file." }),
+              });
+            }
+          });
+          let enforcedFixed = enforceTypeDistribution(fixedQuestions);
+          let sortedFixed = sortQuestionsByTypeOrder(enforcedFixed);
+          let padIndex = 0;
+          while (sortedFixed.length < num_questions) {
+            const targetType = typeDistribution[padIndex % typeDistribution.length].type;
+            const dummyAnswers = getDummyAnswers(targetType, effectiveNumAnswers);
+            sortedFixed.push({
+              question_text: `Câu hỏi mẫu ${sortedFixed.length + 1} từ file.`,
+              explanation: "Giải thích mẫu từ file.",
+              suggested_type: targetType,
+              ...(targetType !== 'open_ended' && { answers: dummyAnswers }),
+              ...(targetType === 'open_ended' && { model_answer: "Đáp án mẫu từ file." }),
+            });
+            padIndex++;
+            sortedFixed = enforceTypeDistribution(sortedFixed);
+            sortedFixed = sortQuestionsByTypeOrder(sortedFixed);
+          }
 
-//     NỘI DUNG FILE MẪU: "${fullTextChunk}"
+          const realQuestions = sortedFixed.filter((q: GeneratedQuestion) => 
+            !q.question_text.includes('mẫu') && 
+            !q.question_text.includes('tự động fix') && 
+            q.question_text.trim().length > 10
+          );
+          if (realQuestions.length < num_questions * 0.5) {
+            throw new Error("Quá nhiều dummy sau manual fix, cần retry");
+          }
 
-//     YÊU CẦU:
-//     1. Tạo ĐÚNG ${mcCount} câu trắc nghiệm (suggested_type: "multiple_choice")
-//     - Format: { "question_text": "...?", "emoji": "🔢", "answers": ["A. ...", "B. ... (correct)", "C. ...", "D. ..."], "explanation": "...", "suggested_type": "multiple_choice" }
+          return sortedFixed;
+        }
+      }
+    }
 
-//     2. Tạo ĐÚNG ${oeCount} câu tự luận (suggested_type: "open_ended")
-//     - Format: { "question_text": "...", "emoji": "✏️", "model_answer": "Đáp án chi tiết...", "explanation": "...", "suggested_type": "open_ended" }
+    // GỌI GEMINI VỚI RETRY (copy từ main)
+    let questions: GeneratedQuestion[] = [];
+    let retryCount = 0;
+    const maxRetries = 3;
+    let genText = "";
 
-//     3. Nội dung PHẢI giống file mẫu:
-//     - Chủ đề: Phép nhân lớp 2 (bảng 2 và 5)
-//     - Dạng: 5+5+5+5 = 5×4, 2 được lấy 8 lần, so sánh 2×7 ... 5×7
-//     - Bài toán thực tế: sách, ghế, tuổi
+    while (retryCount <= maxRetries) {
+      const currentKeyIndex = keyIndex % geminiKeys.length;
+      const currentKey = geminiKeys[currentKeyIndex];
+      keyIndex++;
+      console.log(`Using key ${currentKeyIndex} - attempt ${retryCount + 1} (from file)`);
 
-//     4. Ngôn ngữ: Đơn giản, phù hợp lớp 2
+      const generateRes = await fetch(`${GEMINI_API_URL}?key=${currentKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: generatePrompt }] }],
+          generationConfig: {
+            temperature: difficulty === 'Hard' ? 0.85 : difficulty === 'Easy' ? 0.45 : 0.65,
+            maxOutputTokens: 10000,
+          },
+        }),
+      });
 
-//     Trả lời DUY NHẤT JSON array với ${num_questions} objects, KHÔNG text thừa.`;
+      if (!generateRes.ok) {
+        const errorData = await generateRes.json().catch(() => ({}));
+        console.warn(`Gemini error ${generateRes.status}:`, errorData);
+        if (generateRes.status === 503 || String(errorData?.error?.message || '').toLowerCase().includes('overloaded')) {
+          retryCount++;
+          continue;
+        }
+        const backoff = Math.pow(2, retryCount) * 1000;
+        await setTimeout(backoff);
+        retryCount++;
+        if (retryCount > maxRetries) {
+          throw new Error(`Gemini failed after ${maxRetries} retries`);
+        }
+        continue;
+      }
 
-//     console.log("🧠 Generate prompt preview:", generatePrompt.substring(0, 500) + "...");
+      const genData = await generateRes.json();
+      genText = genData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      console.log("Gemini raw output length (from file):", genText.length);
 
-//     // Generate with retry
-//     let questions: GeneratedQuestion[] = [];
-//     let retryCount = 0;
-//     const maxRetries = 3;
-//     while (retryCount <= maxRetries) {
-//       const currentKey = geminiKeys[keyIndex++ % geminiKeys.length];
-//       const genRes = await fetch(`${GEMINI_API_URL}?key=${currentKey}`, {
-//         method: "POST",
-//         headers: { "Content-Type": "application/json" },
-//         body: JSON.stringify({
-//           contents: [{ parts: [{ text: generatePrompt }] }],
-//           generationConfig: { temperature: difficulty === 'Hard' ? 0.8 : difficulty === 'Easy' ? 0.4 : 0.6, maxOutputTokens: 8000 },
-//         }),
-//       });
+      try {
+        questions = extractAndRepairJson(genText);
+        if (questions.length >= num_questions) break;
+        throw new Error("Not enough valid questions");
+      } catch (e) {
+        console.warn(`Retry ${retryCount + 1}/${maxRetries} (from file):`, e);
+        retryCount++;
+      }
+    }
 
-//       if (!genRes.ok) {
-//         const errMsg = (await genRes.json()).error?.message || genRes.statusText;
-//         console.warn(`⚠️ Gen API error (attempt ${retryCount + 1}): ${errMsg}`);
-//         if (genRes.status === 503) { retryCount++; continue; }
-//         await setTimeout(Math.pow(2, retryCount) * 1000);
-//         retryCount++;
-//         if (retryCount > maxRetries) throw new Error(errMsg);
-//         continue;
-//       }
+    if (questions.length < num_questions) {
+      console.warn(`Only got ${questions.length}/${num_questions} questions from file, proceeding with what we have`);
+    }
 
-//       const genText = (await genRes.json()).candidates?.[0]?.content?.parts?.[0]?.text || "";
-//       console.log("🧠 Gen raw output length:", genText.length);
-//       try {
-//         questions = extractAndRepairJson(genText, num_questions, typeDistribution, effectiveNumAnswers, typesToUse);
-//         if (questions.length >= num_questions) {
-//           console.log("✅ Generated questions based on file:", questions.map(q => ({ text: q.question_text, type: q.suggested_type })).slice(0, 3));
-//           break;
-//         }
-//       } catch (e) {
-//         console.warn(`⚠️ Gen extract failed (attempt ${retryCount + 1}):`, e);
-//         retryCount++;
-//         if (retryCount > maxRetries) throw e;
-//       }
-//     }
+    questions = enforceTypeDistribution(questions);
+    questions = sortQuestionsByTypeOrder(questions);
 
-//     if (questions.length < num_questions * 0.7) {
-//       console.warn(`⚠️ Only ${questions.length}/${num_questions} real questions, but proceeding...`);
-//     }
+    // Insert (sử dụng exercise_name hoặc fallback từ file/lesson)
+    const final_exercise_name = exercise_name.trim() || `Bài tập từ file "${fileName}" - ${lessonTitle || 'Tùy chỉnh'}`;
+    const insertedExercise = await createExerciseWithQuestions(connection, {
+      name: final_exercise_name,
+      user_instructions: lessonTitle || user_instructions.substring(0, 120) || `Từ file "${fileName}"`,
+      type: exercise_type,
+      num_questions,
+      num_answers: effectiveNumAnswers,
+      difficulty,
+      grade_id,
+      subject_id,
+      chapter_id,
+      lesson_id,
+      user_id,
+      question_type_id: questionTypeId,
+    }, questions, existingTypes);
 
-//     // Log final distribution (FIX: Type as Record<string, number>)
-//     const finalCounts: Record<string, number> = questions.reduce((acc, q) => {
-//       const typeKey = q.suggested_type || 'unknown';
-//       return { ...acc, [typeKey]: (acc[typeKey] || 0) + 1 };
-//     }, {} as Record<string, number>);
-//     console.log("📊 Final generated types:", finalCounts);
-
-//     // Insert
-//     const class_id = 2;
-//     const book_id = 1;
-//     const insertedExercise = await createExerciseWithQuestions(connection, {
-//       name: exercise_name,
-//       lesson_name,
-//       type: validatedType,
-//       num_questions,
-//       num_answers: effectiveNumAnswers,
-//       difficulty,
-//       class_id,
-//       book_id,
-//       user_id,
-//       question_type_id: questionTypeId,
-//     }, questions, existingTypes);
-
-//     const responseData = { ...insertedExercise, source_file_name: fileName, generated_from_summary: topic_summary, used_text_length: extractedText.length };
-
-//     return NextResponse.json({ success: true, data: responseData, message: `Tạo ${num_questions} câu (detected: ${mcRatio}% trắc nghiệm, ${oeRatio}% tự luận) dựa sát "${fileName}"` });
-
-//   } catch (err) {
-//     console.error("❌ Error:", err);
-//     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
-//   } finally {
-//     if (connection) connection.release();
-//   }
-// }
+    console.log(`Inserted exercise ID from file: ${insertedExercise.id || 'unknown'}`);
+    return NextResponse.json({ ...insertedExercise, source_file: fileName });
+  } catch (err: any) {
+    console.error("❌ Server error (from file):", err);
+    return NextResponse.json({ error: err.message || "Lỗi server khi tạo câu hỏi từ file" }, { status: 500 });
+  } finally {
+    connection.release();
+  }
+}
