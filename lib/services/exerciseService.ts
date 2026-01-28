@@ -104,7 +104,7 @@ export async function createExerciseWithQuestions(
 
 // Helper: Fetch all QuestionTypes (giữ nguyên)
 export async function fetchQuestionTypes(connection: Connection): Promise<QuestionType[]> {
-  const [rows] = await connection.execute('SELECT * FROM QuestionTypes') as [QuestionType[], FieldPacket[]];
+  const [rows] = await connection.execute('SELECT * FROM questiontypes') as [QuestionType[], FieldPacket[]];
   return rows;
 }
 
