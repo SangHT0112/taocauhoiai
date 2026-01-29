@@ -22,6 +22,39 @@ interface UserRow extends RowDataPacket {
   role: string
 }
 
+async function ensureFreeSubscription(connection: any, userId: number): Promise<void> {
+  try {
+    // Kiểm tra subscription active hiện tại
+    const [subs] = await connection.execute(
+      `SELECT id FROM user_subscriptions 
+       WHERE user_id = ? AND status = 'active' AND end_date >= CURDATE() 
+       LIMIT 1`,
+      [userId]
+    ) as [RowDataPacket[]]
+
+    if (subs.length > 0) return // Đã có gói active → không tạo mới
+
+    // Tạo gói Free (tier_id = 1)
+    const startDate = new Date().toISOString().split('T')[0]
+    const endDate = new Date()
+    endDate.setDate(endDate.getDate() + 30) // Free 30 ngày (có thể đổi thành vĩnh viễn)
+    const endDateStr = endDate.toISOString().split('T')[0]
+
+    await connection.execute(
+      `INSERT INTO user_subscriptions (
+        user_id, tier_id, billing_cycle, start_date, end_date, status,
+        current_tests_used, current_questions_used
+      ) VALUES (?, 1, 'monthly', ?, ?, 'active', 0, 0)`,
+      [userId, startDate, endDateStr]
+    )
+
+    console.log(`Đã tạo gói Free cho user ${userId}`)
+  } catch (err) {
+    console.error("Lỗi tạo gói Free:", err)
+    // Không throw để tránh làm hỏng quá trình login
+  }
+}
+
 /* ======================
    POST /api/auth/google
 ====================== */
@@ -79,6 +112,9 @@ export async function POST(req: NextRequest) {
       } as UserRow
     }
 
+    /* BỔ SUNG: Đảm bảo user có gói Free */
+    await ensureFreeSubscription(connection, user.id)
+
     /* 3️⃣ Tạo JWT */
     const token = jwt.sign(
       {
@@ -89,7 +125,7 @@ export async function POST(req: NextRequest) {
       { expiresIn: "7d" }
     )
 
-    /* 4️⃣ SET COOKIE (QUAN TRỌNG NHẤT) */
+    /* 4️⃣ SET COOKIE */
     const cookieStore = await cookies()
     cookieStore.set("token", token, {
       httpOnly: true,
@@ -99,7 +135,7 @@ export async function POST(req: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 ngày
     })
 
-    /* 5️⃣ Trả response gọn */
+    /* 5️⃣ Trả response */
     return NextResponse.json({
       success: true,
       user: {
