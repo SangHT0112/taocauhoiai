@@ -2,15 +2,14 @@
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import Header from "@/components/layout/Header"
-import Sidebar from "@/components/layout/Sidebar"
+// import Sidebar from "@/components/layout/Sidebar"
 import { getExercisesByUser } from "@/lib/services/exerciseService"
 
 import jwt from "jsonwebtoken"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
-import "../globals.css";
-// Import Provider mới
-import { UserProvider } from "../providers/UserProvider"
+import "../globals.css"
+import { UserProvider } from "../providers/UserProvider" // đường dẫn đúng của bạn
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,7 +22,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "Q-GEN AI - Ôn tập thông minh",
+  title: "Q-GEN AI - Ôn tập thông công",
   description: "Ứng dụng ôn tập thông minh hỗ trợ học tập bằng AI",
 }
 
@@ -37,7 +36,7 @@ export default async function RootLayout({
 
   if (!token) redirect("/login")
 
-  let userId: number
+  let userId: number | null = null
 
   try {
     const decoded = jwt.verify(
@@ -46,38 +45,30 @@ export default async function RootLayout({
     ) as { userId: number }
 
     userId = decoded.userId
-  } catch {
+  } catch (err) {
+    console.error('JWT verify error:', err)
     redirect("/login")
   }
 
-  const exercises = await getExercisesByUser(userId)
+  const exercises = await getExercisesByUser(userId!)
 
   return (
-      <html lang="vi">
-        <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-          {/* Wrap UserProvider Ở ĐÂY – Bao Quát TOÀN BỘ Nội Dung */}
-          <UserProvider userId={userId}>
-            {/* ROOT */}
-            <div className="h-screen flex flex-col overflow-hidden">
+    <html lang="vi">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <UserProvider userId={userId}>
+          <div className="h-screen flex flex-col overflow-hidden">
+            <Header />
 
-              {/* HEADER – Giờ Có Provider */}
-              <Header />
+            <div className="flex flex-1 min-h-0">
+              {/* <Sidebar exercises={exercises} /> */}
 
-              {/* CONTENT */}
-              <div className="flex flex-1 min-h-0">
-
-                {/* SIDEBAR – Giờ Có Provider */}
-                {/* <Sidebar exercises={exercises} /> */}
-
-                {/* MAIN SCROLL – Không cần wrap lại */}
-                <main className="flex-1 min-h-0 overflow-y-auto">
-                  {children}
-                </main>
-
-              </div>
+              <main className="flex-1 min-h-0 overflow-y-auto">
+                {children}
+              </main>
             </div>
-          </UserProvider>
-        </body>
-      </html>
-    )
-  }
+          </div>
+        </UserProvider>
+      </body>
+    </html>
+  )
+}

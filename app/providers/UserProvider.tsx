@@ -1,14 +1,14 @@
-"use client"
+'use client'
 
 import { createContext, useContext, ReactNode } from "react"
 
 interface UserContextType {
-  userId: number
+  userId: number | null
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined)
 
-export function UserProvider({ children, userId }: { children: ReactNode; userId: number }) {
+export function UserProvider({ children, userId }: { children: ReactNode; userId: number | null }) {
   return (
     <UserContext.Provider value={{ userId }}>
       {children}

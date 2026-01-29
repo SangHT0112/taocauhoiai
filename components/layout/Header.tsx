@@ -3,7 +3,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { Bell, Home, FileText, Settings, LogOut } from "lucide-react"
+import { Bell, Home, FileText, Settings, LogOut, CreditCard } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"  // Nếu dùng notifications
@@ -112,8 +112,8 @@ export default function Header() {
                 Bài tập
               </Button>
               <Button variant="ghost" className="gap-2">
-                <Settings className="h-4 w-4" />
-                Cài đặt
+                <CreditCard className="h-4 w-4" />
+                Đăng ký gói
               </Button>
             </nav>
           </div>

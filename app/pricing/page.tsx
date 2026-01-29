@@ -7,6 +7,7 @@ import PricingCard from '@/components/pricing/pricing-card'
 import PricingHeader from '@/components/pricing/pricing-header'
 import Pusher from 'pusher-js'
 import Swal from 'sweetalert2'
+import { useUser } from '@/app/providers/UserProvider'
 
 export interface Tier {
   id: number
@@ -27,6 +28,8 @@ interface Subscription {
 }
 
 export default function PricingPage() {
+  const { userId } = useUser() // <-- dùng từ context, không cần lấy cookie nữa
+
   const [selectedBillingCycle, setSelectedBillingCycle] = useState<'monthly' | 'yearly'>('monthly')
   const [hoveredCard, setHoveredCard] = useState<number | null>(null)
   const [pricingTiers, setPricingTiers] = useState<Tier[]>([])
@@ -42,36 +45,27 @@ export default function PricingPage() {
     vietqrUrl: string
   } | null>(null)
 
-  // Lấy userId từ token
-  const [userId, setUserId] = useState<number | null>(null)
-
   const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
     style: 'currency',
     currency: 'VND'
   }).format(price)
 
-  // Lấy userId từ cookie token
-  useEffect(() => {
-    const token = document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1]
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]))
-        setUserId(payload.userId)
-      } catch {}
-    }
-  }, [])
-
   // Pusher realtime
   useEffect(() => {
-    if (!userId) return
+    if (!userId) {
+      console.log('No userId from context')
+      return
+    }
+
+    console.log('Initializing Pusher for userId:', userId)
 
     const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
       cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
       forceTLS: true,
-      authEndpoint: '/api/pusher/auth', // <-- thêm dòng này
+      authEndpoint: '/api/pusher/auth',
       auth: {
         headers: {
-          'Authorization': `Bearer ${document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1] || ''}`
+          Authorization: `Bearer ${document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1] || ''}`
         }
       }
     })
@@ -82,9 +76,9 @@ export default function PricingPage() {
       console.log(`Subscribed thành công: private-user-${userId}`)
     })
 
-    // channel.bind('pusher:subscription_error', (err) => {
-    //   console.error('Subscription error:', err)
-    // })
+    channel.bind('pusher:subscription_error', (err: any) => {
+      console.error('Subscription error:', err)
+    })
 
     channel.bind('payment_success', (data: any) => {
       console.log('Nhận event payment_success:', data)
@@ -136,11 +130,16 @@ export default function PricingPage() {
       return
     }
 
+    if (!userId) {
+      alert('Vui lòng đăng nhập để nâng cấp')
+      return
+    }
+
     const amount = selectedBillingCycle === 'yearly'
       ? Math.round(tier.price * 12 * 0.8)
       : tier.price
 
-    const description = `Nang cap goi ${tier.tier_name} user ${userId || 'unknown'}`
+    const description = `Nang cap goi ${tier.tier_name} user ${userId}`
 
     const bank_id = "KLB"
     const account_no = "101499100004323939"
