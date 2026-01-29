@@ -297,7 +297,11 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
-
+    // Kiểm tra userId trước
+    if (!userId) {
+      setError("Vui lòng đăng nhập để tạo bài tập")
+      return
+    }
     const errorMessages = {
       exerciseName: "Vui lòng nhập tên bài tập",
       userInstructions: "Vui lòng nhập nội dung bài học",

@@ -48,7 +48,7 @@ export interface QuestionFormData {
   num_questions?: number;
   num_answers?: number;
   difficulty?: 'Easy' | 'Medium' | 'Hard';
-  user_id?: number;
+  user_id?: number | null;
   selected_types?: ('multiple_choice' | 'open_ended' | 'true_false' | 'multiple_select')[];  // Available question types
   grade_id?: number;
   subject_id?: number;

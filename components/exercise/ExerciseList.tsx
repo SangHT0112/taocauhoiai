@@ -379,7 +379,7 @@ export default function ExerciseList({ questions, exerciseId }: { questions: Que
                         <div className={`flex-1 p-3 rounded border ${answer.is_correct ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
                           <span className="font-medium mr-2">{String.fromCharCode(65 + (answer.order_num - 1))}.</span>
                           {answer.answer_text}
-                          {answer.is_correct && <span className="ml-2 text-green-700 font-medium">(Đúng)</span>}
+                          {/* {answer.is_correct && <span className="ml-2 text-green-700 font-medium">(Đúng)</span>} */}
                         </div>
                       )}
                     </div>
