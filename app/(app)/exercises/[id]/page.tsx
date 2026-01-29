@@ -10,7 +10,6 @@ import ExerciseList from "@/components/exercise/ExerciseList"  // Import client 
 interface Exercise {
   id: number
   name: string
-  lesson_name: string
   type: string
   num_questions: number
   difficulty: string
@@ -130,7 +129,6 @@ export default async function ExerciseDetailPage({
 
         <PrintActions
           exerciseName={exercise.name}
-          lessonName={exercise.lesson_name}
           questions={printableQuestions}
         />
 

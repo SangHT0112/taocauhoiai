@@ -165,9 +165,9 @@ export default function Header() {
           <span>Bài tập</span>
         </Link>
 
-        <Link href="/settings" className="flex items-center gap-2">
-          <Settings className="h-4 w-4" />
-          <span>Cài đặt</span>
+        <Link href="/pricing" className="flex items-center gap-2">
+          <CreditCard className="h-4 w-4" />
+          <span>Đăng ký gói</span>
         </Link>
       </nav>
 

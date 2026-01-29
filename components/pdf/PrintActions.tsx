@@ -8,13 +8,11 @@ import type { PDFQuestion } from "@/types/pdf"
 
 interface PrintActionsProps {
   exerciseName: string
-  lessonName: string
   questions: PDFQuestion[]
 }
 
 export default function PrintActions({
   exerciseName,
-  lessonName,
   questions,
 }: PrintActionsProps) {
   return (
@@ -26,7 +24,6 @@ export default function PrintActions({
           generateAndDownloadWord(questions, {
             filename: `${exerciseName}-khong-dap-an.docx`,
             exerciseName,
-            lessonName,
             showAnswers: false,
             showExplanation: false,
           })
@@ -41,7 +38,6 @@ export default function PrintActions({
           generateAndDownloadWord(questions, {
             filename: `${exerciseName}-co-dap-an.docx`,
             exerciseName,
-            lessonName,
             showAnswers: true,
             showExplanation: true,
           })

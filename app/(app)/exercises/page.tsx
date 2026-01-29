@@ -7,7 +7,6 @@ import pool from "@/lib/db"
 interface Exercise {
   id: number
   name: string
-  lesson_name: string
   type: string
   num_questions: number
   difficulty: string
@@ -42,7 +41,7 @@ export default async function ExercisesPage() {
   try {
     const [rows] = await connection.execute(
       `
-      SELECT id, name, lesson_name, type, num_questions, difficulty, created_at
+      SELECT id, name, type, num_questions, difficulty, created_at
       FROM exercises
       WHERE user_id = ?
       ORDER BY created_at DESC
@@ -68,7 +67,7 @@ export default async function ExercisesPage() {
             {rows.map((exercise) => (
                 <div key={exercise.id} className="border p-4 rounded-lg">
                     <h2 className="text-xl font-semibold">{exercise.name}</h2>
-                    <p>Bài học: {exercise.lesson_name}</p>
+                    {/* <p>Bài học: {exercise.lesson_name}</p> */}
                     <p>Loại: {exercise.type}</p>
                     <p>Số câu: {exercise.num_questions}</p>
                     <p>Độ khó: {exercise.difficulty}</p>
