@@ -86,7 +86,9 @@ export default function PricingPage() {
 
         channel.bind('payment_success', (data: any) => {
           console.log('🎉 payment_success:', data)
-
+           setShowPaymentModal(false)
+            setPendingTier(null)
+            setPaymentInfo(null)
           Swal.fire({
             title: '🎉 Thanh toán thành công!',
             text: data.message || 'Gói đã kích hoạt',
@@ -296,10 +298,15 @@ export default function PricingPage() {
               <div className="text-sm text-gray-600 mb-6 space-y-2">
                 <p><strong>Ngân hàng:</strong> Kien Long Bank</p>
                 <p><strong>Số TK:</strong> 101499100004323939</p>
-                <p><strong>Chủ TK:</strong> KhoaHocOnline</p>
-                <p><strong>Nội dung CK:</strong> <br />
+                <p><strong>Chủ TK:</strong> Gnas</p>
+                <p><strong>Nội dung CK:</strong>
                   <code className="bg-gray-100 px-2 py-1 rounded">{paymentInfo.description}</code>
                 </p>
+                <p className="mt-2 text-sm text-red-600">
+                  ⚠️ Vui lòng <strong>GIỮ NGUYÊN</strong> nội dung chuyển khoản,
+                  đặc biệt là đoạn <strong>"user {userId}"</strong> để hệ thống tự động xác nhận.
+                </p>
+
               </div>
 
               <div className="flex flex-col gap-3">
