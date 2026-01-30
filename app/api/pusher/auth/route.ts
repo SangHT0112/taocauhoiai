@@ -1,7 +1,6 @@
 // app/api/pusher/auth/route.ts
-import { NextRequest, NextResponse } from 'next/server'
-import Pusher from 'pusher'
-import jwt from 'jsonwebtoken'
+import { NextRequest, NextResponse } from "next/server"
+import Pusher from "pusher"
 
 const pusher = new Pusher({
   appId: process.env.PUSHER_APP_ID!,
@@ -11,38 +10,22 @@ const pusher = new Pusher({
   useTLS: true,
 })
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json()
-    const { socket_id, channel_name } = body
+    const body = await req.text() // 🔥 QUAN TRỌNG
+    const params = new URLSearchParams(body)
 
-    // Lấy token từ cookie
-    const token = request.cookies.get('token')?.value
-    if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const socketId = params.get("socket_id")
+    const channel = params.get("channel_name")
+
+    if (!socketId || !channel) {
+      return NextResponse.json({ error: "Missing socket_id or channel" }, { status: 400 })
     }
 
-    // Verify token lấy userId
-    let userId: number
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number }
-      userId = decoded.userId
-    } catch {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
-    }
-
-    // Chỉ cho phép subscribe channel của chính user
-    if (channel_name === `private-user-${userId}`) {
-      const authResponse = pusher.authenticate(socket_id, channel_name, {
-        user_id: userId.toString(),
-        user_info: { id: userId }
-      })
-      return NextResponse.json(authResponse)
-    }
-
-    return NextResponse.json({ error: 'Forbidden channel' }, { status: 403 })
-  } catch (error) {
-    console.error('Pusher auth error:', error)
-    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+    const auth = pusher.authorizeChannel(socketId, channel)
+    return NextResponse.json(auth)
+  } catch (err) {
+    console.error("❌ PUSHER AUTH ERROR:", err)
+    return NextResponse.json({ error: "Auth failed" }, { status: 500 })
   }
 }

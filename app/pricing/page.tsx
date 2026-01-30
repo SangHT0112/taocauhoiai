@@ -50,53 +50,64 @@ export default function PricingPage() {
     currency: 'VND'
   }).format(price)
 
-  // Pusher realtime
   useEffect(() => {
-    if (!userId) {
-      console.log('No userId from context')
-      return
-    }
+    if (!userId) return
 
-    console.log('Initializing Pusher for userId:', userId)
+    const numericUserId = Number(userId)
+    if (isNaN(numericUserId)) return
+
+    console.log('Init Pusher user:', numericUserId)
 
     const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
       cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
       forceTLS: true,
       authEndpoint: '/api/pusher/auth',
-      auth: {
-        headers: {
-          Authorization: `Bearer ${document.cookie.split('; ').find(row => row.startsWith('token='))?.split('=')[1] || ''}`
-        }
+    })
+
+    pusher.connection.bind(
+      'state_change',
+      (states: { previous: string; current: string }) => {
+        const { previous, current } = states
+        console.log('Pusher:', previous, '→', current)
+
+      if (current === 'connected') {
+        const channelName = `private-user-${numericUserId}`
+        console.log('Subscribe:', channelName)
+
+        const channel = pusher.subscribe(channelName)
+
+        channel.bind('pusher:subscription_succeeded', () => {
+          console.log('✅ Subscribed OK')
+        })
+
+        channel.bind('pusher:subscription_error', (err: any) => {
+          console.error('❌ Subscription error:', err)
+        })
+
+        channel.bind('payment_success', (data: any) => {
+          console.log('🎉 payment_success:', data)
+
+          Swal.fire({
+            title: '🎉 Thanh toán thành công!',
+            text: data.message || 'Gói đã kích hoạt',
+            icon: 'success',
+          }).then(() => {
+            fetch('/api/user-subscriptions', { credentials: 'include' })
+              .then(res => res.json())
+              .then(sub => setCurrentSubscription(sub.subscription || null))
+          })
+        })
       }
     })
 
-    const channel = pusher.subscribe(`private-user-${userId}`)
+  pusher.connection.bind('error', (err: any) => {
+    console.error('Pusher error:', err)
+  })
 
-    channel.bind('pusher:subscription_succeeded', () => {
-      console.log(`Subscribed thành công: private-user-${userId}`)
-    })
-
-    channel.bind('pusher:subscription_error', (err: any) => {
-      console.error('Subscription error:', err)
-    })
-
-    channel.bind('payment_success', (data: any) => {
-      console.log('Nhận event payment_success:', data)
-      Swal.fire({
-        title: '🎉 Thanh toán thành công!',
-        text: data.message || 'Gói của bạn đã được kích hoạt!',
-        icon: 'success',
-        confirmButtonText: 'OK'
-      }).then(() => {
-        fetch('/api/user-subscriptions', { credentials: 'include' })
-          .then(res => res.json())
-          .then(sub => setCurrentSubscription(sub.subscription || null))
-      })
-    })
 
     return () => {
-      channel.unbind_all()
-      channel.unsubscribe()
+      console.log('Cleanup Pusher')
+      pusher.unsubscribe(`private-user-${numericUserId}`)
       pusher.disconnect()
     }
   }, [userId])
@@ -153,32 +164,6 @@ export default function PricingPage() {
     setShowPaymentModal(true)
   }
 
-  const confirmPayment = async () => {
-    if (!pendingTier) return
-
-    try {
-      const res = await fetch('/api/pricing-tiers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier_id: pendingTier.id, billing_cycle: selectedBillingCycle }),
-        credentials: 'include'
-      })
-
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || 'Kích hoạt gói thất bại')
-      }
-
-      const data = await res.json()
-      alert(data.message || 'Yêu cầu kích hoạt đã được gửi! Chờ xác nhận thanh toán.')
-
-      setShowPaymentModal(false)
-      setPendingTier(null)
-      setPaymentInfo(null)
-    } catch (err: any) {
-      alert(err.message || 'Lỗi kết nối')
-    }
-  }
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Đang tải...</div>
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600">{error}</div>
@@ -318,12 +303,6 @@ export default function PricingPage() {
               </div>
 
               <div className="flex flex-col gap-3">
-                <Button
-                  onClick={confirmPayment}
-                  className="bg-green-600 hover:bg-green-700 text-white font-semibold py-6"
-                >
-                  Tôi đã chuyển khoản xong
-                </Button>
 
                 <Button
                   variant="outline"
