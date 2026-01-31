@@ -62,7 +62,6 @@ export async function POST(request: NextRequest) {
       chapter_id?: number;
       lesson_id?: number;
     };
-
     // Validation
     if (!user_id) return NextResponse.json({ error: "Thiếu user_id" }, { status: 400 });
     if (!exercise_name?.trim()) return NextResponse.json({ error: "Vui lòng nhập tên bài tập" }, { status: 400 });
@@ -79,6 +78,51 @@ export async function POST(request: NextRequest) {
     if (!subject_id || subject_id <= 0) return NextResponse.json({ error: "Vui lòng chọn môn học (subject_id)" }, { status: 400 });
     if (!chapter_id || chapter_id <= 0) return NextResponse.json({ error: "Vui lòng chọn chương (chapter_id)" }, { status: 400 });
     if (!lesson_id || lesson_id <= 0) return NextResponse.json({ error: "Vui lòng chọn bài học (lesson_id)" }, { status: 400 });
+
+
+    // ─── KIỂM TRA SUBSCRIPTION & QUOTA ────────────────────────────────
+    const [subs] = await connection.execute(
+      `SELECT 
+        us.*,
+        st.max_tests,
+        st.max_questions,
+        st.tier_name
+      FROM user_subscriptions us
+      JOIN subscription_tiers st ON us.tier_id = st.id
+      WHERE us.user_id = ?
+        AND us.status = 'active'
+        AND us.start_date <= CURDATE()
+        AND (us.end_date >= CURDATE() OR us.end_date IS NULL)
+      ORDER BY us.start_date DESC
+      LIMIT 1`,
+      [user_id]
+    ) as any;
+
+    if (subs.length === 0) {
+      return NextResponse.json(
+        { error: "Không tìm thấy gói đăng ký đang hoạt động. Vui lòng nâng cấp gói." },
+        { status: 403 }
+      );
+    }
+
+    const subscription = subs[0];
+    const remainingTests  = subscription.max_tests  - (subscription.current_tests_used  || 0);
+    const remainingQuestions = subscription.max_questions - (subscription.current_questions_used || 0);
+
+    if (remainingTests < 1) {
+      return NextResponse.json(
+        { error: `Bạn đã dùng hết số bài tập cho phép trong gói ${subscription.tier_name} (${subscription.max_tests} bài). Vui lòng nâng cấp gói.` },
+        { status: 403 }
+      );
+    }
+
+    if (remainingQuestions < num_questions) {
+      return NextResponse.json(
+        { error: `Không đủ quota câu hỏi. Còn lại: ${remainingQuestions}, bạn yêu cầu: ${num_questions}. Gói ${subscription.tier_name} cho phép tối đa ${subscription.max_questions} câu.` },
+        { status: 403 }
+      );
+    }
+
 
     // Fetch lesson info từ DB
     let lessonTitle = '';
@@ -538,7 +582,17 @@ YÊU CẦU CHUNG:
       question_type_id: questionTypeId,
     }, questions, existingTypes);
 
-    console.log(`Inserted exercise ID: ${insertedExercise.id || 'unknown'}`);
+    // CẬP NHẬT QUOTA
+    await connection.execute(
+      `UPDATE user_subscriptions
+      SET 
+        current_tests_used = current_tests_used + 1,
+        current_questions_used = current_questions_used + ?
+      WHERE id = ?`,
+      [num_questions, subscription.id]
+    );
+
+    
     return NextResponse.json(insertedExercise);
   } catch (err: any) {
     console.error("❌ Server error:", err);

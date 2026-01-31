@@ -171,7 +171,48 @@ export async function POST(request: NextRequest) {
     if (!subject_id || subject_id <= 0) subject_id = 1; // Default Toán
     if (!chapter_id || chapter_id <= 0) chapter_id = 1; // Default chương 1
     if (!lesson_id || lesson_id <= 0) lesson_id = 1; // Default bài 1
+    // ─── KIỂM TRA SUBSCRIPTION & QUOTA (copy từ route không file) ────────────────────────────────
+    const [subs] = await connection.execute(
+      `SELECT 
+        us.*,
+        st.max_tests,
+        st.max_questions,
+        st.tier_name
+      FROM user_subscriptions us
+      JOIN subscription_tiers st ON us.tier_id = st.id
+      WHERE us.user_id = ?
+        AND us.status = 'active'
+        AND us.start_date <= CURDATE()
+        AND (us.end_date >= CURDATE() OR us.end_date IS NULL)
+      ORDER BY us.start_date DESC
+      LIMIT 1`,
+      [user_id]
+    ) as any;
 
+    if (subs.length === 0) {
+      return NextResponse.json(
+        { error: "Không tìm thấy gói đăng ký đang hoạt động. Vui lòng nâng cấp gói." },
+        { status: 403 }
+      );
+    }
+
+    const subscription = subs[0];
+    const remainingTests = subscription.max_tests - (subscription.current_tests_used || 0);
+    const remainingQuestions = subscription.max_questions - (subscription.current_questions_used || 0);
+
+    if (remainingTests < 1) {
+      return NextResponse.json(
+        { error: `Bạn đã dùng hết số bài tập cho phép trong gói ${subscription.tier_name} (${subscription.max_tests} bài). Vui lòng nâng cấp gói.` },
+        { status: 403 }
+      );
+    }
+
+    if (remainingQuestions < num_questions) {
+      return NextResponse.json(
+        { error: `Không đủ quota câu hỏi. Còn lại: ${remainingQuestions}, bạn yêu cầu: ${num_questions}. Gói ${subscription.tier_name} cho phép tối đa ${subscription.max_questions} câu.` },
+        { status: 403 }
+      );
+    }
     // Validate & extract file
     const fileName = file.name.toLowerCase();
     if (!fileName.endsWith('.docx') && !fileName.endsWith('.doc')) return NextResponse.json({ error: "Chỉ hỗ trợ DOCX/DOC" }, { status: 400 });
@@ -312,24 +353,36 @@ export async function POST(request: NextRequest) {
     const contentPart = `NỘI DUNG BÀI HỌC TỪ FILE VÀ SÁCH GIÁO KHOA:\n${enrichedLessonInfo}\n\n`;
 
     const generatePrompt = `
-Trả lời DUY NHẤT bằng mảng JSON hợp lệ chứa đúng ${num_questions} object. KHÔNG thêm bất kỳ text nào ngoài JSON.
+    Trả lời DUY NHẤT bằng mảng JSON hợp lệ chứa đúng ${num_questions} object. KHÔNG thêm bất kỳ text nào ngoài JSON.
 
-Mỗi object: ${objectStr}
+    Mỗi object: ${objectStr}
 
-TẠO CÂU HỎI THEO THỨ TỰ ƯU TIÊN:
+    BẮT BUỘC TUÂN THỦ CÁC QUY TẮC SAU (ƯU TIÊN CAO NHẤT):
+    1. TẠO CÂU HỎI MỚI, TƯƠNG TỰ nhưng KHÔNG ĐƯỢC COPY NGUYÊN VĂN bất kỳ câu hỏi, đề bài, số liệu, câu chữ nào từ file.
+    2. Chỉ DÙNG Ý TƯỞNG, CHỦ ĐỀ, KIẾN THỨC từ file để sáng tạo câu hỏi mới.
+    3. Biến tấu: thay đổi số liệu, tình huống, hình ảnh mô tả, cách hỏi (nhưng giữ đúng kiến thức và độ khó).
+    4. Không được dùng lại chính xác bất kỳ cụm từ nào có trong file (ví dụ: nếu file có "Tính 8 + 7 = ?", thì KHÔNG được dùng lại "8 + 7", phải dùng số khác như "9 + 6", "12 + 5", v.v.).
+    5. Giữ phong cách SGK tiểu học Việt Nam: "Quan sát tranh", "Tính nhẩm", "Điền số thích hợp", "Chọn đáp án đúng", "Đúng hay Sai", "Tìm x", "Sắp xếp tăng dần", ...
+    6. Câu hỏi ngắn (<40 chữ), explanation ngắn (<30 chữ), đáp án/model_answer ngắn gọn.
+    7. Phân bố loại: ${distributionStr}
+    8. Ngôn ngữ: ${levelDescription}
+    9. Chủ đề: ${subjectHint}
+    10. Độ khó: ${difficulty}
 
-${userReqPart}${contentPart}
+    NỘI DUNG BÀI HỌC TỪ FILE (chỉ dùng làm ý tưởng, KHÔNG COPY):
+    ${enrichedLessonInfo}
 
-YÊU CẦU CHUNG:
-- Ngôn ngữ: ${levelDescription}
-- Chủ đề: ${subjectHint}
-- Độ khó: ${difficulty}
-- Phân bố loại: ${distributionStr}
-- ${specificReq}
-- Câu hỏi ngắn (<50 chữ)
-- Explanation học thuật, <30 chữ
-- suggested_type chỉ dùng trong: ${typesStr}
-`.trim();
+    YÊU CẦU CỤ THỂ TỪ GIÁO VIÊN (nếu có):
+    ${userReqPart}
+
+    Few-shot ví dụ (theo phong cách này, nhưng KHÔNG copy nội dung):
+    [
+      {"question_text": "Quan sát tranh: Có bao nhiêu quả táo?", "answers": ["3", "4 (correct)", "5", "6"], "explanation": "Trong tranh có 4 quả táo.", "suggested_type": "multiple_choice"},
+      {"question_text": "Tính nhẩm: 15 + 9 = ?", "model_answer": "24", "explanation": "15 + 9 = 24", "suggested_type": "open_ended"}
+    ]
+
+    Trả lời DUY NHẤT bằng mảng JSON:
+    `.trim();
 
     // Helper functions (copy từ main)
     function sortQuestionsByTypeOrder(questions: GeneratedQuestion[]): GeneratedQuestion[] {
@@ -609,6 +662,7 @@ YÊU CẦU CHUNG:
 
     // Insert (sử dụng exercise_name hoặc fallback từ file/lesson)
     const final_exercise_name = exercise_name.trim() || `Bài tập từ file "${fileName}" - ${lessonTitle || 'Tùy chỉnh'}`;
+    // Insert xong
     const insertedExercise = await createExerciseWithQuestions(connection, {
       name: final_exercise_name,
       user_instructions: lessonTitle || user_instructions.substring(0, 120) || `Từ file "${fileName}"`,
@@ -624,8 +678,21 @@ YÊU CẦU CHUNG:
       question_type_id: questionTypeId,
     }, questions, existingTypes);
 
-    console.log(`Inserted exercise ID from file: ${insertedExercise.id || 'unknown'}`);
-    return NextResponse.json({ ...insertedExercise, source_file: fileName });
+    // CẬP NHẬT QUOTA (copy từ route không file)
+    await connection.execute(
+      `UPDATE user_subscriptions
+      SET 
+        current_tests_used = current_tests_used + 1,
+        current_questions_used = current_questions_used + ?
+      WHERE id = ?`,
+      [num_questions, subscription.id]
+    );
+
+    // Trả về giống hệt route không-file: nguyên object + thêm source_file
+    return NextResponse.json({
+      ...insertedExercise,           // copy tất cả field từ service (bao gồm id)
+      source_file: fileName,         // thêm field riêng
+    });
   } catch (err: any) {
     console.error("❌ Server error (from file):", err);
     return NextResponse.json({ error: err.message || "Lỗi server khi tạo câu hỏi từ file" }, { status: 500 });

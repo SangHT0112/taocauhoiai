@@ -27,7 +27,7 @@ export default function Sidebar({
   }, [exercises, searchQuery])
 
   return (
-    <aside className="hidden lg:flex flex-col w-80 border-r bg-white h-screen">
+    <aside className="hidden lg:flex flex-col w-80 border-r bg-white h-full min-h-0">
       {/* ===== Header ===== */}
       <div className="p-6 border-b">
         <h2 className="text-2xl font-bold">Danh sách bài tập</h2>
@@ -48,7 +48,7 @@ export default function Sidebar({
       </div>
 
       {/* ===== Content ===== */}
-      <ScrollArea className="flex-1 p-4">
+      <ScrollArea className="flex-1 min-h-0 p-4">
         {filteredExercises.length === 0 ? (
           <div className="text-center py-10">
             <BookOpen className="h-12 w-12 mx-auto text-gray-300 mb-3" />

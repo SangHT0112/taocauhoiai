@@ -23,42 +23,52 @@ export default function FileQuestionForm({ onCancel }: FileQuestionFormProps) {
   }
 
   const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault()
+  e.preventDefault()
 
-    if (!file) {
-      setError("Vui lòng chọn file")
-      return
-    }
-
-    setIsLoading(true)
-
-    try {
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("user_id", String(userId)) 
-      // console.log("userid:", userId)
-      const res = await fetch("/api/generate-questions/from-file", {
-        method: "POST",
-        body: formData,
-      })
-
-      if (!res.ok) {
-        throw new Error("Không thể tạo bài tập từ file")
-      }
-
-      const data = await res.json()
-
-      // 👉 Sau này: redirect hoặc đổ data vào QuestionForm
-      console.log("AI generated:", data)
-
-      router.push(`/exercises/${data.exerciseId}`)
-      router.refresh()  // Refresh để update data nếu cần
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setIsLoading(false)
-    }
+  if (!file) {
+    setError("Vui lòng chọn file")
+    return
   }
+
+  setIsLoading(true)
+  setError("")
+
+  try {
+    const formData = new FormData()
+    formData.append("file", file)
+    formData.append("user_id", String(userId))
+    // Thêm các field khác nếu cần (exercise_name, type, num_questions, v.v.)
+    // Ví dụ: formData.append("num_questions", "10")
+
+    const res = await fetch("/api/generate-questions/from-file", {
+      method: "POST",
+      body: formData,
+    })
+
+    if (!res.ok) {
+      const errData = await res.json()
+      throw new Error(errData.error || "Không thể tạo bài tập từ file")
+    }
+
+    const data = await res.json()
+
+    console.log("Response từ API:", data) // ← Debug: xem response có id không
+
+    const exerciseId = data.id
+
+    if (!exerciseId || typeof exerciseId !== 'number' || exerciseId <= 0) {
+      throw new Error("Không nhận được ID bài tập hợp lệ từ server")
+    }
+
+    router.push(`/exercises/${exerciseId}`)
+    router.refresh()
+  } catch (err: any) {
+    console.error("Lỗi tạo bài tập:", err)
+    setError(err.message || "Đã xảy ra lỗi khi tạo bài tập")
+  } finally {
+    setIsLoading(false)
+  }
+}
 
   return (
     <Card className="p-6">

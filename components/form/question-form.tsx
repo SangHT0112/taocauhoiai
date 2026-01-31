@@ -359,8 +359,8 @@ export default function QuestionForm({ onCancel, initialData }: QuestionFormProp
         throw new Error("Không nhận được ID bài tập từ server")
       }
 
-      // Clear draft sau submit thành công
-      localStorage.removeItem(STORAGE_KEY);
+      // KHÔNG xóa draft sau khi submit thành công - giữ lại các giá trị đã chọn
+      // localStorage.removeItem(STORAGE_KEY); // Đã bỏ dòng này
 
       router.push(`/exercises/${exerciseId}`)
       router.refresh()
